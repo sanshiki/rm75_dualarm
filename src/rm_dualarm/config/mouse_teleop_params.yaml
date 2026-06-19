@@ -1,0 +1,22 @@
+# ================================================================
+# Mouse teleoperation — absolute screen-to-plane mapping parameters
+# ================================================================
+# Workspace:
+#   Screen X (left→right)  →  robot Y (y_min → y_max)
+#   Screen Y (bottom→top)  →  robot Z (z_min → z_max)
+#   X position fixed at fixed_x, orientation fixed at identity.
+
+mouse_teleop:
+  ros__parameters:
+    fixed_x: 0.35              # Fixed X distance from base [m]
+    y_min: -0.35               # Robot Y at left edge of screen [m]
+    y_max: 0.35                # Robot Y at right edge of screen [m]
+    z_min: 0.15                # Robot Z at bottom of screen [m]
+    z_max: 0.70                # Robot Z at top of screen [m]
+    fixed_qx: 0.0              # Fixed orientation quaternion X
+    fixed_qy: 0.0              # Fixed orientation quaternion Y
+    fixed_qz: 0.0              # Fixed orientation quaternion Z
+    fixed_qw: 1.0              # Fixed orientation quaternion W (identity)
+    publish_rate: 30.0         # Publish rate [Hz]
+    target_topic: /target_pose # Where servo_pose_tracking_demo listens
+    base_frame: base_link      # Reference frame for PoseStamped

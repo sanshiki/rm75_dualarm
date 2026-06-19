@@ -1,0 +1,64 @@
+# ================================================================
+# MoveIt2 Servo configuration — RM75 real robot
+# ================================================================
+# Servo outputs JointTrajectory to servo_bridge, which converts to
+# Jointpos CANFD messages for rm_driver.
+#
+# Reference:
+#   /opt/ros/humble/include/moveit_servo/servo_parameters.h
+#   https://moveit.picknik.ai/humble/doc/examples/realtime_servo/realtime_servo_tutorial.html
+
+use_gazebo: false
+
+# ---- Incoming command properties ----
+command_in_type: "speed_units"
+scale:
+  linear: 0.10                    # Reduced for real robot safety [m/s]
+  rotational: 0.2                # Reduced for real robot safety [rad/s]
+  joint: 0.5                      # Max joint velocity [rad/s]
+
+# ---- Outgoing command properties ----
+publish_period: 0.020             # 50 Hz
+low_latency_mode: false
+
+command_out_type: trajectory_msgs/JointTrajectory
+publish_joint_positions: true
+publish_joint_velocities: true
+publish_joint_accelerations: false
+
+# ---- Smoothing ----
+smoothing_filter_plugin_name: "online_signal_smoothing::ButterworthFilterPlugin"
+
+# ---- Planning scene ----
+is_primary_planning_scene_monitor: false
+
+# ---- MoveIt properties ----
+move_group_name: rm_group
+planning_frame: base_link
+
+# ---- Frames (RM75 specific) ----
+ee_frame_name: Link7
+robot_link_command_frame: Link7
+
+# ---- Stopping behaviour ----
+incoming_command_timeout: 0.15
+num_outgoing_halt_msgs_to_publish: 4
+
+# ---- Singularity and joint limits ----
+lower_singularity_threshold: 17.0
+hard_stop_singularity_threshold: 30.0
+leaving_singularity_threshold_multiplier: 2.0
+joint_limit_margin: 0.1
+
+# ---- Topics ----
+cartesian_command_in_topic: ~/delta_twist_cmds
+joint_command_in_topic: ~/delta_joint_cmds
+joint_topic: /joint_states
+status_topic: ~/status
+command_out_topic: /servo_bridge/joint_trajectory_in
+
+# ---- Collision checking ----
+check_collisions: true
+collision_check_rate: 10.0
+self_collision_proximity_threshold: 0.01
+scene_collision_proximity_threshold: 0.02
