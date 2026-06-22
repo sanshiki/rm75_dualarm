@@ -32,6 +32,7 @@ def generate_launch_description():
     ld.add_action(DeclareLaunchArgument("fixed_qy", default_value="0.0"))
     ld.add_action(DeclareLaunchArgument("fixed_qz", default_value="0.0"))
     ld.add_action(DeclareLaunchArgument("fixed_qw", default_value="1.0"))
+    ld.add_action(DeclareLaunchArgument("static_quat", default_value="true"))
     # Rate & topic
     ld.add_action(DeclareLaunchArgument("publish_rate", default_value="30.0"))
     ld.add_action(DeclareLaunchArgument("target_topic", default_value="/target_pose"))
@@ -52,6 +53,7 @@ def generate_launch_description():
             "fixed_qy": LaunchConfiguration("fixed_qy"),
             "fixed_qz": LaunchConfiguration("fixed_qz"),
             "fixed_qw": LaunchConfiguration("fixed_qw"),
+            "static_quat": LaunchConfiguration("static_quat"),
             "publish_rate": LaunchConfiguration("publish_rate"),
             "target_topic": LaunchConfiguration("target_topic"),
             "base_frame": LaunchConfiguration("base_frame"),

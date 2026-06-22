@@ -41,10 +41,10 @@ ament_target_dependencies(servo_bridge
   tf2_ros
 )
 
-# --- Python node: mouse_teleop ---
-# Install the Python node alongside other scripts
+# --- Python scripts ---
 install(PROGRAMS
   src/mouse_teleop_node.py
+  scripts/pose_init.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

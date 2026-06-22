@@ -44,7 +44,7 @@ def generate_launch_description():
         DeclareLaunchArgument("use_mouse_teleop", default_value="true")
     )
     ld.add_action(
-        DeclareLaunchArgument("fixed_x", default_value="0.35")
+        DeclareLaunchArgument("fixed_x", default_value="0.25")
     )
     ld.add_action(
         DeclareLaunchArgument("y_min", default_value="-0.35")

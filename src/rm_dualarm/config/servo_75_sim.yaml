@@ -17,8 +17,8 @@ scale:
   joint: 0.5                      # Max joint velocity [rad/s]
 
 # ---- Outgoing command properties ----
-publish_period: 0.02
-low_latency_mode: false
+publish_period: 0.04
+low_latency_mode: true
 
 command_out_type: trajectory_msgs/JointTrajectory
 publish_joint_positions: true
@@ -29,9 +29,9 @@ publish_joint_accelerations: false
 smoothing_filter_plugin_name: "online_signal_smoothing::ButterworthFilterPlugin"
 
 # ---- Planning scene ----
-# servo_pose_tracking_demo needs to be the primary monitor when no
-# separate move_group is launched alongside it.
-is_primary_planning_scene_monitor: true
+# false: move_group runs as the primary monitor alongside servo.
+#        Required for pose_init to work (move_group provides /move_action).
+is_primary_planning_scene_monitor: false
 
 # ---- MoveIt properties ----
 move_group_name: rm_group
