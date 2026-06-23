@@ -19,7 +19,7 @@ import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, ExecuteProcess, TimerAction
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -35,9 +35,9 @@ def generate_launch_description():
     # ---- Launch arguments ----
     ld.add_action(
         DeclareLaunchArgument(
-            "use_pose_tracking", default_value="true",
+            "use_pose_tracking", default_value="false",
             description="true=servo_pose_tracking_demo (PoseStamped), "
-                        "false=servo_node_main (TwistStamped/JointJog)"
+                        "false=servo_node_main (TwistStamped/JointJog) [default]"
         )
     )
     ld.add_action(
@@ -106,9 +106,6 @@ def generate_launch_description():
     ld.add_action(pose_tracking_node)
 
     # ---- 1b. servo_node_main (TwistStamped / JointJog → Servo) ----
-    # Note: servo_node_main needs to be started via the
-    # /servo_node/start_servo service after launch:
-    #   ros2 service call /servo_node/start_servo std_srvs/srv/Trigger
     servo_node = Node(
         package="moveit_servo",
         executable="servo_node_main",
@@ -122,23 +119,58 @@ def generate_launch_description():
     )
     ld.add_action(servo_node)
 
-    # ---- 2. Trajectory relay (teleop_active → settle → forward) ----
-    traj_relay_node = Node(
-        package="rm_dualarm",
-        executable="trajectory_relay.py",
-        name="trajectory_relay",
-        output="screen",
-        parameters=[{
-            "input_topic": "/rm_group_controller/joint_trajectory_raw",
-            "output_topic": "/rm_group_controller/joint_trajectory",
-            "settle_seconds": 4.0,
-            "max_wait": 3000.0,
-            "use_sim_time": True,
-        }],
+    # Auto-start the servo after a short delay
+    start_servo = TimerAction(
+        period=3.0,
+        actions=[
+            ExecuteProcess(
+                cmd=["ros2", "service", "call", "/servo_node/start_servo",
+                     "std_srvs/srv/Trigger", "{}"],
+                output="screen",
+            )
+        ],
+        condition=UnlessCondition(use_pose_tracking),
     )
-    ld.add_action(traj_relay_node)
+    ld.add_action(start_servo)
 
-    # ---- 3. (Optional) RViz ----
+    # ---- 2. Trajectory relay (teleop_active → settle → forward) ----
+    # traj_relay_node = Node(
+    #     package="rm_dualarm",
+    #     executable="trajectory_relay.py",
+    #     name="trajectory_relay",
+    #     output="screen",
+    #     parameters=[{
+    #         "input_topic": "/rm_group_controller/joint_trajectory_raw",
+    #         "output_topic": "/rm_group_controller/joint_trajectory",
+    #         "settle_seconds": 4.0,
+    #         "max_wait": 3000.0,
+    #         "use_sim_time": True,
+    #     }],
+    # )
+    # ld.add_action(traj_relay_node)
+
+    # ---- 3. PoseTracking node (PoseStamped → TwistStamped, shared) ----
+    pose_tracking_node = Node(
+        package="rm_dualarm",
+        executable="pose_tracking_node.py",
+        name="pose_tracking",
+        output="screen",
+        parameters=[
+            # PID gains + filter settings (top-level, same YAML)
+            {k: v for k, v in pose_tracking_cfg.items()
+             if k in ("x_proportional_gain", "y_proportional_gain",
+                      "z_proportional_gain", "x_integral_gain",
+                      "y_integral_gain", "z_integral_gain",
+                      "x_derivative_gain", "y_derivative_gain",
+                      "z_derivative_gain", "angular_proportional_gain",
+                      "angular_integral_gain", "angular_derivative_gain",
+                      "windup_limit", "filter_enabled", "filter_alpha")},
+            {"use_sim_time": True},
+        ],
+    )
+    ld.add_action(pose_tracking_node)
+
+    # ---- 4. (Optional) RViz ----
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -160,7 +192,7 @@ def generate_launch_description():
     )
     ld.add_action(rviz_node)
 
-    # ---- 4. Teleop (mouse or VR, mutually exclusive) ----
+    # ---- 5. Teleop (mouse or VR, mutually exclusive) ----
     is_mouse = PythonExpression(["'", teleop_type, "' == 'mouse'"])
     is_vr    = PythonExpression(["'", teleop_type, "' == 'vr'"])
 

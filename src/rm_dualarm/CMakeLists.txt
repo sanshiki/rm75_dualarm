@@ -44,6 +44,7 @@ ament_target_dependencies(servo_bridge
 # --- Python scripts ---
 install(PROGRAMS
   src/mouse_teleop_node.py
+  src/pose_tracking_node.py
   src/vr_teleop_node.py
   src/vr_base_broadcaster.py
   scripts/pose_init.py
