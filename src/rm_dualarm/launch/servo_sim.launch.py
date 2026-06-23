@@ -164,7 +164,9 @@ def generate_launch_description():
                       "x_derivative_gain", "y_derivative_gain",
                       "z_derivative_gain", "angular_proportional_gain",
                       "angular_integral_gain", "angular_derivative_gain",
-                      "windup_limit", "filter_enabled", "filter_alpha")},
+                      "windup_limit", "filter_enabled", "filter_alpha",
+                      "safe_zone_enabled",
+                      "x_min", "x_max", "y_min", "y_max", "z_min", "z_max")},
             {"use_sim_time": True},
         ],
     )

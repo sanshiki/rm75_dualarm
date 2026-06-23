@@ -15,7 +15,9 @@ import rclpy
 from rclpy.node import Node
 from rclpy.time import Time
 from rclpy.duration import Duration
-from geometry_msgs.msg import PoseStamped, TwistStamped, Vector3
+from geometry_msgs.msg import PoseStamped, TwistStamped, Vector3, Point
+from visualization_msgs.msg import Marker
+from std_msgs.msg import ColorRGBA
 from tf2_ros import Buffer, TransformListener, TransformException
 
 
@@ -84,6 +86,15 @@ class PoseTrackingNode(Node):
         self.declare_parameter("filter_enabled", False)
         self.declare_parameter("filter_alpha", 0.3)          # 0.0 = max smooth, 1.0 = bypass
 
+        # ---- Safe zone (clamp target_pose before tracking) ----
+        self.declare_parameter("safe_zone_enabled", True)
+        self.declare_parameter("x_min", 0.15)
+        self.declare_parameter("x_max", 0.60)
+        self.declare_parameter("y_min", -0.40)
+        self.declare_parameter("y_max", 0.40)
+        self.declare_parameter("z_min", 0.10)
+        self.declare_parameter("z_max", 0.80)
+
         # Read params
         wu = self.get_parameter("windup_limit").value
         self._pid_x = PID1D(
@@ -107,6 +118,13 @@ class PoseTrackingNode(Node):
         self._base_frame = self.get_parameter("base_frame").value
         self._max_lin = self.get_parameter("max_linear").value
         self._max_ang = self.get_parameter("max_angular").value
+        self._safe_on = self.get_parameter("safe_zone_enabled").value
+        self._sx_min = self.get_parameter("x_min").value
+        self._sx_max = self.get_parameter("x_max").value
+        self._sy_min = self.get_parameter("y_min").value
+        self._sy_max = self.get_parameter("y_max").value
+        self._sz_min = self.get_parameter("z_min").value
+        self._sz_max = self.get_parameter("z_max").value
         self._filter_on = self.get_parameter("filter_enabled").value
         self._filter_a = self.get_parameter("filter_alpha").value
         self._filter_a = max(0.0, min(1.0, self._filter_a))
@@ -126,6 +144,8 @@ class PoseTrackingNode(Node):
         # ---- Pub / Sub ----
         self._twist_pub = self.create_publisher(
             TwistStamped, self.get_parameter("twist_topic").value, 10)
+        self._viz_pub = self.create_publisher(
+            Marker, "/pose_tracking/safe_zone", 1)
         self.create_subscription(
             PoseStamped, self.get_parameter("target_topic").value,
             self._target_cb, 10)
@@ -133,13 +153,77 @@ class PoseTrackingNode(Node):
         # ---- Control loop ----
         rate = max(self.get_parameter("publish_rate").value, 1.0)
         self._timer = self.create_timer(1.0 / rate, self._tick)
+        # Safe-zone marker is static; republish every 5 s for late joiners
+        self._viz_timer = self.create_timer(5.0, self._publish_safe_zone)
+        self._publish_safe_zone()   # also publish immediately
         self._last_tick = self.get_clock().now()
 
         self.get_logger().info(
             f"pose_tracking ready | ee={self._ee_frame} "
             f"| P=({self._pid_x.kp:.1f},{self._pid_y.kp:.1f},{self._pid_z.kp:.1f},{self._pid_ang.kp:.1f}) "
-            f"| filter={'on' if self._filter_on else 'off'} (α={self._filter_a:.2f})"
+            f"| filter={'on' if self._filter_on else 'off'} (α={self._filter_a:.2f}) "
+            f"| safe={'on' if self._safe_on else 'off'} "
+            f"X=[{self._sx_min:.2f},{self._sx_max:.2f}] "
+            f"Y=[{self._sy_min:.2f},{self._sy_max:.2f}] "
+            f"Z=[{self._sz_min:.2f},{self._sz_max:.2f}]"
         )
+
+    # ==================================================================
+    def _publish_safe_zone(self):
+        """Publish a wireframe cube Marker showing the safe-zone bounds."""
+        cube = Marker()
+        cube.header.stamp = self.get_clock().now().to_msg()
+        cube.header.frame_id = self._base_frame
+        cube.ns = "safe_zone"
+        cube.id = 0
+        cube.type = Marker.CUBE
+        cube.action = Marker.ADD
+        cube.lifetime = Duration(seconds=10).to_msg()
+
+        x_range = self._sx_max - self._sx_min
+        y_range = self._sy_max - self._sy_min
+        z_range = self._sz_max - self._sz_min
+        cube.pose.position.x = self._sx_min + x_range / 2.0
+        cube.pose.position.y = self._sy_min + y_range / 2.0
+        cube.pose.position.z = self._sz_min + z_range / 2.0
+        cube.pose.orientation.w = 1.0
+        cube.scale.x = x_range
+        cube.scale.y = y_range
+        cube.scale.z = z_range
+
+        # Wireframe green, semi-transparent
+        cube.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=0.2)
+        # Edges via LINE_LIST
+        edge = Marker()
+        edge.header = cube.header
+        edge.ns = "safe_zone"
+        edge.id = 1
+        edge.type = Marker.LINE_LIST
+        edge.action = Marker.ADD
+        edge.lifetime = cube.lifetime
+        edge.pose = cube.pose
+        edge.scale.x = 0.005        # line width
+        edge.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=0.5)
+
+        # 12 edges of the cube
+        rx, ry, rz = x_range / 2.0, y_range / 2.0, z_range / 2.0
+        corners = [
+            (-rx, -ry, -rz), ( rx, -ry, -rz), (-rx,  ry, -rz), ( rx,  ry, -rz),
+            (-rx, -ry,  rz), ( rx, -ry,  rz), (-rx,  ry,  rz), ( rx,  ry,  rz),
+        ]
+        indices = [
+            (0,1),(0,2),(1,3),(2,3),  # bottom
+            (4,5),(4,6),(5,7),(6,7),  # top
+            (0,4),(1,5),(2,6),(3,7),  # vertical
+        ]
+        pts = []
+        for a, b in indices:
+            pts.append(Point(x=corners[a][0], y=corners[a][1], z=corners[a][2]))
+            pts.append(Point(x=corners[b][0], y=corners[b][1], z=corners[b][2]))
+        edge.points = pts
+
+        self._viz_pub.publish(cube)
+        self._viz_pub.publish(edge)
 
     # ==================================================================
     def _target_cb(self, msg: PoseStamped):
@@ -188,10 +272,14 @@ class PoseTrackingNode(Node):
             return
         ex, ey, ez, eroll, epitch, eyaw = ee
 
-        # Position error
+        # Position error — clamp target to safe zone first
         tx = self._target.pose.position.x
         ty = self._target.pose.position.y
         tz = self._target.pose.position.z
+        if self._safe_on:
+            tx = max(self._sx_min, min(self._sx_max, tx))
+            ty = max(self._sy_min, min(self._sy_max, ty))
+            tz = max(self._sz_min, min(self._sz_max, tz))
         err_x = tx - ex
         err_y = ty - ey
         err_z = tz - ez
