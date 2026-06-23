@@ -17,6 +17,7 @@ from rclpy.node import Node
 from rclpy.time import Time
 from rclpy.duration import Duration
 from geometry_msgs.msg import PoseStamped, Point, Quaternion
+from std_msgs.msg import Bool
 from tf2_ros import Buffer, TransformListener, TransformException
 
 try:
@@ -85,6 +86,7 @@ class MouseTeleopNode(Node):
 
         # ---- Publisher ----
         self._pose_pub = self.create_publisher(PoseStamped, self._target_topic, 10)
+        self._active_pub = self.create_publisher(Bool, "/teleop_active", 1)
 
         # ---- TF (for reading current EE orientation) ----
         self._tf_buffer = Buffer()
@@ -179,6 +181,7 @@ class MouseTeleopNode(Node):
         )
 
         self._pose_pub.publish(pose)
+        self._active_pub.publish(Bool(data=True))
 
 
 # ======================================================================

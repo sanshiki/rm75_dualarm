@@ -1,0 +1,102 @@
+# ================================================================
+# VR teleoperation — full pipeline
+# ================================================================
+# Data flow:
+#   Quest VR → ROS-TCP-Endpoint → /quest/joystick + TF (headset/hand)
+#   → vr_base_broadcaster (headset TF → vr_base frame)
+#   → vr_teleop_node (hand TF → /target_pose)
+#   → servo_pose_tracking_demo → robot
+#
+# Usage:
+#   ros2 launch rm_dualarm vr_teleop.launch.py
+# ================================================================
+
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
+
+def generate_launch_description():
+    ld = LaunchDescription()
+
+    # ---- vr_base_broadcaster args ----
+    ld.add_action(DeclareLaunchArgument("odom_frame", default_value="odom"))
+    ld.add_action(DeclareLaunchArgument("headset_frame", default_value="headset"))
+    ld.add_action(DeclareLaunchArgument("use_headset_yaw", default_value="false"))
+    ld.add_action(DeclareLaunchArgument("broadcast_rate", default_value="30.0"))
+
+    # ---- vr_teleop args ----
+    ld.add_action(DeclareLaunchArgument("target_topic", default_value="/target_pose"))
+    ld.add_action(DeclareLaunchArgument("joy_topic", default_value="/quest/joystick"))
+    ld.add_action(DeclareLaunchArgument("vr_base_frame", default_value="vr_base"))
+    ld.add_action(DeclareLaunchArgument("vr_origin_frame", default_value="vr_origin"))
+    ld.add_action(DeclareLaunchArgument("vr_hand_frame", default_value="hand_right"))
+    ld.add_action(DeclareLaunchArgument("base_frame", default_value="base_link"))
+    ld.add_action(DeclareLaunchArgument("publish_rate", default_value="50.0"))
+    ld.add_action(DeclareLaunchArgument("p_sensitivity", default_value="4.0"))
+    ld.add_action(DeclareLaunchArgument("q_sensitivity", default_value="4.0"))
+    ld.add_action(DeclareLaunchArgument("user_height", default_value="1.75"))
+
+    # ================================================================
+    # 1. Relay receiver (TCP JSON from Docker ROS 1 sender)
+    #    Run relay_sender.py inside the Docker container alongside the
+    #    ROS 1 ros_tcp_endpoint:
+    #      docker exec aubo-ros python3 relay_sender.py --host <HOST_IP> --port 7654
+    # ================================================================
+    ld.add_action(DeclareLaunchArgument("bind_ip", default_value="172.17.0.1"))
+    ld.add_action(DeclareLaunchArgument("relay_port", default_value="7654"))
+    relay_rx = Node(
+        package="rm_dualarm",
+        executable="relay_receiver.py",
+        name="relay_receiver",
+        output="screen",
+        parameters=[{
+            "bind_ip": LaunchConfiguration("bind_ip"),
+            "port": LaunchConfiguration("relay_port"),
+        }],
+    )
+    ld.add_action(relay_rx)
+
+    # ================================================================
+    # 2. VR base broadcaster (headset TF → vr_base frame)
+    # ================================================================
+    # vr_base_br = Node(
+    #     package="rm_dualarm",
+    #     executable="vr_base_broadcaster.py",
+    #     name="vr_base_broadcaster",
+    #     output="screen",
+    #     parameters=[{
+    #         "odom_frame": LaunchConfiguration("odom_frame"),
+    #         "headset_frame": LaunchConfiguration("headset_frame"),
+    #         "use_headset_yaw": LaunchConfiguration("use_headset_yaw"),
+    #         "rate": LaunchConfiguration("broadcast_rate"),
+    #     }],
+    # )
+    # ld.add_action(vr_base_br)
+
+    # ================================================================
+    # 3. VR teleop node (hand TF → /target_pose)
+    # ================================================================
+    vr_node = Node(
+        package="rm_dualarm",
+        executable="vr_teleop_node.py",
+        name="vr_teleop",
+        output="screen",
+        parameters=[{
+            "target_topic": LaunchConfiguration("target_topic"),
+            "joy_topic": LaunchConfiguration("joy_topic"),
+            "vr_base_frame": LaunchConfiguration("vr_base_frame"),
+            "vr_origin_frame": LaunchConfiguration("vr_origin_frame"),
+            "vr_hand_frame": LaunchConfiguration("vr_hand_frame"),
+            "base_frame": LaunchConfiguration("base_frame"),
+            "publish_rate": LaunchConfiguration("publish_rate"),
+            "p_sensitivity": LaunchConfiguration("p_sensitivity"),
+            "q_sensitivity": LaunchConfiguration("q_sensitivity"),
+            "user_height": LaunchConfiguration("user_height"),
+            "use_sim_time": LaunchConfiguration("use_sim_time", default="false"),
+        }],
+    )
+    ld.add_action(vr_node)
+
+    return ld

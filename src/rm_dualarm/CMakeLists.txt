@@ -44,7 +44,11 @@ ament_target_dependencies(servo_bridge
 # --- Python scripts ---
 install(PROGRAMS
   src/mouse_teleop_node.py
+  src/vr_teleop_node.py
+  src/vr_base_broadcaster.py
   scripts/pose_init.py
+  scripts/relay_receiver.py
+  scripts/trajectory_relay.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -52,6 +56,7 @@ install(PROGRAMS
 install(DIRECTORY
   launch
   config
+  rviz
   DESTINATION share/${PROJECT_NAME}
 )
 

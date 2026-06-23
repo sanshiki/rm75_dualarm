@@ -29,9 +29,9 @@ publish_joint_accelerations: false
 smoothing_filter_plugin_name: "online_signal_smoothing::ButterworthFilterPlugin"
 
 # ---- Planning scene ----
-# false: move_group runs as the primary monitor alongside servo.
-#        Required for pose_init to work (move_group provides /move_action).
-is_primary_planning_scene_monitor: false
+# true: servo reads /joint_states directly and computes FK itself.
+#       Avoids stale/incorrect EE pose from a missing move_group.
+is_primary_planning_scene_monitor: true
 
 # ---- MoveIt properties ----
 move_group_name: rm_group
@@ -58,7 +58,7 @@ cartesian_command_in_topic: ~/delta_twist_cmds
 joint_command_in_topic: ~/delta_joint_cmds
 joint_topic: /joint_states
 status_topic: ~/status
-command_out_topic: /rm_group_controller/joint_trajectory
+command_out_topic: /rm_group_controller/joint_trajectory_raw
 
 # ---- Collision checking ----
 # Disabled initially to isolate potential crash causes.

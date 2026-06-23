@@ -21,7 +21,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition, UnlessCondition
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
@@ -41,7 +41,10 @@ def generate_launch_description():
         )
     )
     ld.add_action(
-        DeclareLaunchArgument("use_mouse_teleop", default_value="true")
+        DeclareLaunchArgument(
+            "teleop_type", default_value="mouse",
+            description="mouse | vr | none"
+        )
     )
     ld.add_action(
         DeclareLaunchArgument("fixed_x", default_value="0.25")
@@ -58,7 +61,7 @@ def generate_launch_description():
     )
 
     use_pose_tracking = LaunchConfiguration("use_pose_tracking")
-    use_mouse_teleop = LaunchConfiguration("use_mouse_teleop")
+    teleop_type = LaunchConfiguration("teleop_type")
     use_rviz = LaunchConfiguration("use_rviz")
 
     # ---- MoveIt2 configuration (URDF + SRDF + kinematics) ----
@@ -119,7 +122,23 @@ def generate_launch_description():
     )
     ld.add_action(servo_node)
 
-    # ---- 2. (Optional) RViz ----
+    # ---- 2. Trajectory relay (teleop_active → settle → forward) ----
+    traj_relay_node = Node(
+        package="rm_dualarm",
+        executable="trajectory_relay.py",
+        name="trajectory_relay",
+        output="screen",
+        parameters=[{
+            "input_topic": "/rm_group_controller/joint_trajectory_raw",
+            "output_topic": "/rm_group_controller/joint_trajectory",
+            "settle_seconds": 4.0,
+            "max_wait": 3000.0,
+            "use_sim_time": True,
+        }],
+    )
+    ld.add_action(traj_relay_node)
+
+    # ---- 3. (Optional) RViz ----
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -128,8 +147,8 @@ def generate_launch_description():
         arguments=[
             "-d",
             os.path.join(
-                get_package_share_directory("rm_75_config"),
-                "config",
+                get_package_share_directory("rm_dualarm"),
+                "rviz",
                 "moveit.rviz",
             ),
         ],
@@ -141,12 +160,15 @@ def generate_launch_description():
     )
     ld.add_action(rviz_node)
 
-    # ---- 3. (Optional) Mouse teleop ----
+    # ---- 4. Teleop (mouse or VR, mutually exclusive) ----
+    is_mouse = PythonExpression(["'", teleop_type, "' == 'mouse'"])
+    is_vr    = PythonExpression(["'", teleop_type, "' == 'vr'"])
+
     mouse_teleop_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_share, "launch", "mouse_teleop.launch.py")
         ),
-        condition=IfCondition(use_mouse_teleop),
+        condition=IfCondition(is_mouse),
         launch_arguments={
             "fixed_x": LaunchConfiguration("fixed_x"),
             "y_min": LaunchConfiguration("y_min"),
@@ -154,5 +176,13 @@ def generate_launch_description():
         }.items(),
     )
     ld.add_action(mouse_teleop_launch)
+
+    vr_teleop_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg_share, "launch", "vr_teleop.launch.py")
+        ),
+        condition=IfCondition(is_vr),
+    )
+    ld.add_action(vr_teleop_launch)
 
     return ld

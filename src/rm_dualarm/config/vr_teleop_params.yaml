@@ -1,0 +1,33 @@
+# ================================================================
+# VR teleoperation parameters
+# ================================================================
+# Loaded by vr_teleop.launch.py for the full VR pipeline:
+#   ROS-TCP-Endpoint → vr_base_broadcaster → vr_teleop_node
+
+# ---- ROS-TCP-Endpoint (Unity ↔ ROS bridge) ----
+ros_tcp_endpoint:
+  ros__parameters:
+    ROS_IP: "192.168.1.100"
+    ROS_TCP_PORT: 10024
+
+# ---- VR base broadcaster (headset TF → vr_base frame) ----
+vr_base_broadcaster:
+  ros__parameters:
+    odom_frame: "odom"
+    headset_frame: "headset"
+    use_headset_yaw: false
+    rate: 30.0
+
+# ---- VR teleop node (hand TF → /target_pose) ----
+vr_teleop:
+  ros__parameters:
+    target_topic: /target_pose
+    joy_topic: /quest/joystick
+    vr_base_frame: vr_base
+    vr_origin_frame: vr_origin
+    vr_hand_frame: hand_right
+    base_frame: base_link
+    publish_rate: 50.0
+    p_sensitivity: 4.0
+    q_sensitivity: 4.0
+    user_height: 1.75

@@ -41,25 +41,13 @@ ros2 launch rm_bringup rm_75_bringup.launch.py
 
 ```bash
 # 仿真 — 两个终端
-ros2 launch rm_gazebo gazebo_75_demo.launch.py          # T1: Gazebo
+ros2 launch rm_dualarm sim_bringup.launch.py          # T1: Gazebo
 ros2 launch rm_dualarm servo_sim.launch.py               # T2: Servo + 鼠标遥操作
 
 # 真机 — 两个终端
 ros2 launch rm_driver rm_75_driver.launch.py             # T1: 驱动
 ros2 launch rm_dualarm servo_real.launch.py              # T2: Servo
-
-# 单独启动鼠标遥操作（调试用）
-ros2 launch rm_dualarm mouse_teleop.launch.py
 ```
-
-### 鼠标控制
-
-| 操作 | 机械臂运动 |
-|------|-----------|
-| 按住左键 + 移动 | 末端 Y（左右）/ Z（上下）平移 |
-| 按住右键 + 移动 | 末端 Roll / Pitch 旋转 |
-| 滚轮 | 末端 X（前后）平移 |
-| 松开按键 | 保持当前位置 |
 
 ### 参数
 

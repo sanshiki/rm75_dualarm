@@ -22,7 +22,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition, UnlessCondition
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
@@ -42,7 +42,10 @@ def generate_launch_description():
         )
     )
     ld.add_action(
-        DeclareLaunchArgument("use_mouse_teleop", default_value="true")
+        DeclareLaunchArgument(
+            "teleop_type", default_value="mouse",
+            description="mouse | vr | none"
+        )
     )
     ld.add_action(
         DeclareLaunchArgument("fixed_x", default_value="0.35")
@@ -59,7 +62,7 @@ def generate_launch_description():
     )
 
     use_pose_tracking = LaunchConfiguration("use_pose_tracking")
-    use_mouse_teleop = LaunchConfiguration("use_mouse_teleop")
+    teleop_type = LaunchConfiguration("teleop_type")
     use_rviz = LaunchConfiguration("use_rviz")
 
     # ---- MoveIt2 configuration ----
@@ -190,12 +193,15 @@ def generate_launch_description():
     )
     ld.add_action(rviz_node)
 
-    # ---- 6. (Optional) Mouse teleop ----
+    # ---- 6. Teleop (mouse or VR, mutually exclusive) ----
+    is_mouse = PythonExpression(["'", teleop_type, "' == 'mouse'"])
+    is_vr    = PythonExpression(["'", teleop_type, "' == 'vr'"])
+
     mouse_teleop_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_share, "launch", "mouse_teleop.launch.py")
         ),
-        condition=IfCondition(use_mouse_teleop),
+        condition=IfCondition(is_mouse),
         launch_arguments={
             "fixed_x": LaunchConfiguration("fixed_x"),
             "y_min": LaunchConfiguration("y_min"),
@@ -203,5 +209,13 @@ def generate_launch_description():
         }.items(),
     )
     ld.add_action(mouse_teleop_launch)
+
+    vr_teleop_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg_share, "launch", "vr_teleop.launch.py")
+        ),
+        condition=IfCondition(is_vr),
+    )
+    ld.add_action(vr_teleop_launch)
 
     return ld
