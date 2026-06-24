@@ -177,17 +177,20 @@ class VRTrackerNode(Node):
 
     def _load_calibration(self):
         default = {
+            "schema_version": 1,
             "enabled": False,
             "mirror_convergence": False,
             "left": {
                 "position_scale": [1.0, 1.0, 1.0],
                 "position_offset": [0.0, 0.0, 0.0],
                 "rotation_offset_quat": [0.0, 0.0, 0.0, 1.0],
+                "rotation_scale": 1.0,
             },
             "right": {
                 "position_scale": [1.0, 1.0, 1.0],
                 "position_offset": [0.0, 0.0, 0.0],
                 "rotation_offset_quat": [0.0, 0.0, 0.0, 1.0],
+                "rotation_scale": 1.0,
             },
         }
         if not self._calibration_enabled:
@@ -208,12 +211,16 @@ class VRTrackerNode(Node):
             return default
         with open(path, "r", encoding="utf-8") as f:
             loaded = yaml.safe_load(f) or {}
-        default.update({k: v for k, v in loaded.items() if k in default})
+        for key, value in loaded.items():
+            if key in default and key not in ("left", "right"):
+                default[key] = value
         for side in ("left", "right"):
             merged = default[side]
             merged.update(loaded.get(side, {}) or {})
             default[side] = merged
-        self.get_logger().info(f"Loaded VR calibration: {path}")
+        self.get_logger().info(
+            f"Loaded VR calibration: {path} (schema v{default.get('schema_version', 1)})"
+        )
         return default
 
     # ==================================================================
@@ -336,6 +343,65 @@ class VRTrackerNode(Node):
         quat = (R.from_quat(q_offset) * R.from_quat(quat)).as_quat()
         return pos, quat
 
+    def _mapped_hand_pose(self, trans):
+        q_raw = np.array([
+            trans.transform.rotation.x, trans.transform.rotation.y,
+            trans.transform.rotation.z, trans.transform.rotation.w,
+        ])
+        r_orig = R.from_quat(q_raw).as_matrix()
+        r_mapped = r_orig @ ORI_MAPPING
+        q_mapped = R.from_matrix(r_mapped).as_quat()
+        position = np.array([
+            trans.transform.translation.x,
+            trans.transform.translation.y,
+            trans.transform.translation.z,
+        ], dtype=float)
+        return position, q_mapped
+
+    def _make_pose_msg(self, base_frame, position, quat):
+        pose = PoseStamped()
+        pose.header.stamp = self.get_clock().now().to_msg()
+        pose.header.frame_id = base_frame
+        pose.pose.position.x = float(position[0])
+        pose.pose.position.y = float(position[1])
+        pose.pose.position.z = float(position[2])
+        pose.pose.orientation.x = float(quat[0])
+        pose.pose.orientation.y = float(quat[1])
+        pose.pose.orientation.z = float(quat[2])
+        pose.pose.orientation.w = float(quat[3])
+        return pose
+
+    def _pose_from_calibrated_hand(self, hand_frame, base_frame, side):
+        cfg = self._calibration.get(side, {})
+        hand_ref = cfg.get("vr_hand_standby") or {}
+        ee_ref = cfg.get("robot_ee_standby") or {}
+        try:
+            hand_ref_p = np.array(hand_ref["position"], dtype=float)
+            hand_ref_q = np.array(hand_ref["orientation_quat"], dtype=float)
+            ee_ref_p = np.array(ee_ref["position"], dtype=float)
+            ee_ref_q = np.array(ee_ref["orientation_quat"], dtype=float)
+        except (KeyError, TypeError, ValueError):
+            self.get_logger().warn(
+                f"VR calibration schema v2 missing {side} standby pose; using legacy mapping",
+                throttle_duration_sec=2.0,
+            )
+            return self._pose_from_hand(hand_frame, base_frame, side=side)
+
+        trans = self._tf_buffer.lookup_transform(
+            self._vr_base, hand_frame, Time(), Duration(seconds=0.1))
+        hand_p, hand_q = self._mapped_hand_pose(trans)
+
+        delta_p = hand_p - hand_ref_p
+        scale = np.array(cfg.get("position_scale", [1.0, 1.0, 1.0]), dtype=float)
+        target_p = ee_ref_p + delta_p * scale
+
+        delta_r = R.from_quat(hand_q) * R.from_quat(hand_ref_q).inv()
+        rotation_scale = float(cfg.get("rotation_scale", 1.0))
+        if rotation_scale != 1.0:
+            delta_r = R.from_rotvec(delta_r.as_rotvec() * rotation_scale)
+        target_q = (delta_r * R.from_quat(ee_ref_q)).as_quat()
+        return self._make_pose_msg(base_frame, target_p, target_q)
+
     def _pose_from_hand(self, hand_frame, base_frame, y_offset=0.0, side="right"):
         now = Time()
         try:
@@ -351,33 +417,16 @@ class VRTrackerNode(Node):
             return None
 
         # Remap VR orientation to robot frame
-        q_raw = np.array([
-            trans.transform.rotation.x, trans.transform.rotation.y,
-            trans.transform.rotation.z, trans.transform.rotation.w,
-        ])
-        r_orig = R.from_quat(q_raw).as_matrix()
-        r_mapped = r_orig @ ORI_MAPPING
-        q_mapped = R.from_matrix(r_mapped).as_quat()
+        hand_position, q_mapped = self._mapped_hand_pose(trans)
 
         position = np.array([
-            trans.transform.translation.x,
-            trans.transform.translation.y + y_offset,
-            trans.transform.translation.z - (self._user_height / 2.0 - 0.2),
+            hand_position[0],
+            hand_position[1] + y_offset,
+            hand_position[2] - (self._user_height / 2.0 - 0.2),
         ])
         position, q_mapped = self._apply_calibration(side, position, q_mapped)
 
-        # Build PoseStamped
-        pose = PoseStamped()
-        pose.header.stamp = self.get_clock().now().to_msg()
-        pose.header.frame_id = base_frame
-        pose.pose.position.x = float(position[0])
-        pose.pose.position.y = float(position[1])
-        pose.pose.position.z = float(position[2])
-        pose.pose.orientation.x = q_mapped[0]
-        pose.pose.orientation.y = q_mapped[1]
-        pose.pose.orientation.z = q_mapped[2]
-        pose.pose.orientation.w = q_mapped[3]
-        return pose
+        return self._make_pose_msg(base_frame, position, q_mapped)
 
     def _normal_control(self):
         """Absolute VR hand pose → robot target."""
@@ -387,10 +436,16 @@ class VRTrackerNode(Node):
         self._pose_pub.publish(pose)
 
     def _dual_normal_control(self):
-        left_pose = self._pose_from_hand(
-            self._left_hand_frame, self._left_base_frame, self._dual_y_offset, "left")
-        right_pose = self._pose_from_hand(
-            self._right_hand_frame, self._right_base_frame, -self._dual_y_offset, "right")
+        if self._calibration.get("enabled") and self._calibration.get("schema_version") == 2:
+            left_pose = self._pose_from_calibrated_hand(
+                self._left_hand_frame, self._left_base_frame, "left")
+            right_pose = self._pose_from_calibrated_hand(
+                self._right_hand_frame, self._right_base_frame, "right")
+        else:
+            left_pose = self._pose_from_hand(
+                self._left_hand_frame, self._left_base_frame, self._dual_y_offset, "left")
+            right_pose = self._pose_from_hand(
+                self._right_hand_frame, self._right_base_frame, -self._dual_y_offset, "right")
         if left_pose is not None:
             self._left_pose_pub.publish(left_pose)
         if right_pose is not None:

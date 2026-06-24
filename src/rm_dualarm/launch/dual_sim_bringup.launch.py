@@ -21,6 +21,7 @@ def generate_launch_description():
     ld.add_action(DeclareLaunchArgument("use_move_group", default_value="true"))
     ld.add_action(DeclareLaunchArgument("use_pose_init", default_value="true"))
     ld.add_action(DeclareLaunchArgument("init_delay", default_value="8.0"))
+    ld.add_action(DeclareLaunchArgument("standby_pose_file", default_value=""))
     ld.add_action(DeclareLaunchArgument("base_x", default_value=""))
     ld.add_action(DeclareLaunchArgument("base_z", default_value=""))
     ld.add_action(DeclareLaunchArgument("base_spacing_y", default_value=""))
@@ -147,6 +148,7 @@ def generate_launch_description():
             parameters=[{
                 "delay_seconds": LaunchConfiguration("init_delay"),
                 "control_mode": "dual",
+                "standby_pose_file": LaunchConfiguration("standby_pose_file"),
                 "use_sim_time": True,
             }],
             condition=IfCondition(PythonExpression([

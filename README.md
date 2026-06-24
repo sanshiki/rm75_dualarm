@@ -94,7 +94,7 @@ source install/setup.bash
 ros2 launch rm_dualarm dual_sim_bringup.launch.py
 ```
 
-`dual_sim_bringup.launch.py` 默认会在左右 Gazebo 控制器加载完成后运行 `pose_init.py control_mode:=dual`，让 `left_rm_group` 和 `right_rm_group` 依次从 0 位移动到待机姿态。可用 `use_pose_init:=false` 跳过，或用 `init_delay:=10.0` 调整等待时间：
+`dual_sim_bringup.launch.py` 默认会在左右 Gazebo 控制器加载完成后运行 `pose_init.py control_mode:=dual`，让 `left_rm_group` 和 `right_rm_group` 依次从 0 位移动到待机姿态。待机关节从 `config/standby_pose.yaml` 读取；可用 `standby_pose_file:=/path/to/standby_pose.yaml` 覆盖。也可用 `use_pose_init:=false` 跳过，或用 `init_delay:=10.0` 调整等待时间：
 
 ```bash
 ros2 launch rm_dualarm dual_sim_bringup.launch.py use_pose_init:=false
@@ -125,14 +125,16 @@ ros2 launch rm_dualarm servo_sim.launch.py control_mode:=dual teleop_type:=vr
 ros2 launch rm_dualarm vr_teleop.launch.py control_mode:=dual use_relay_receiver:=false
 ```
 
-VR 标定参数在 `config/vr_calibration.yaml`。默认启用 `mirror_convergence`，用于避免“操作者需要交叉手臂才能让机械臂向中间收拢”。可以用当前左右手中立位生成一份初始标定：
+VR 标定参数模板在 `config/vr_calibration.yaml`。实际测试建议为每个操作者生成一份标定文件：先确认双臂已经由 `pose_init` 到达 `standby_pose.yaml` 定义的待机动作；操作者直立，双手自然握遥控器，大臂紧贴身体下垂，小臂 90 度平行地面抬起，保持遥控器和地面平行，然后按 `Y` 采样。脚本会记录该预设动作下的头显高度、左右手位姿和左右机械臂末端待机位姿，并生成 `schema_version: 2` 标定文件。
 
 ```bash
 ros2 launch rm_dualarm vr_calibration.launch.py output_file:=/tmp/vr_calibration.yaml
-# 保持左右手自然中立位，按 Y 保存
+# 保持预设动作，按 Y；默认采样 2 秒求均值
 ros2 launch rm_dualarm servo_sim.launch.py control_mode:=dual teleop_type:=vr \
   vr_calibration_file:=/tmp/vr_calibration.yaml
 ```
+
+新版标定会把预设动作绑定到机械臂待机末端位姿，之后按手部相对预设动作的增量控制目标。若要调整灵敏度，修改生成文件中的 `left/right.position_scale`；若某套 VR 坐标的右手 Y 方向相反，可把 `right.position_scale` 改成 `[1.0, -1.0, 1.0]`；若要减弱姿态跟随，修改 `left/right.rotation_scale`。
 
 链路验证命令：
 

@@ -11,7 +11,9 @@ joint pose is sent to ``left_rm_group`` and ``right_rm_group`` with the
 matching joint-name prefixes.
 """
 
+import os
 import sys
+import yaml
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
@@ -24,17 +26,6 @@ from moveit_msgs.msg import (
 )
 from builtin_interfaces.msg import Duration
 
-
-# Fixed non-singular pose, using unprefixed RM75 joint names.
-_BASE_INIT_JOINTS = {
-    "joint1": -0.022524496509642944,
-    "joint2":  0.263926554708664440,
-    "joint3": -0.011319336648978329,
-    "joint4":  1.293130423737138400,
-    "joint5": -0.008347275735425264,
-    "joint6":  1.323508237049473700,
-    "joint7":  0.217822762411817200,
-}
 
 _PLANNING_GROUP = "rm_group"
 _EXPECTED_JOINTS = ["joint1", "joint2", "joint3", "joint4",
@@ -53,8 +44,10 @@ class PoseInitNode(Node):
 
         self.declare_parameter("delay_seconds", 15.0)
         self.declare_parameter("control_mode", "single")
+        self.declare_parameter("standby_pose_file", "")
         delay = self.get_parameter("delay_seconds").value
         self._control_mode = self.get_parameter("control_mode").value
+        self._base_init_joints = self._load_standby_joints()
         self._targets = self._make_targets()
         self._target_index = 0
         self._action = None
@@ -65,16 +58,51 @@ class PoseInitNode(Node):
         )
         self._init_timer = self.create_timer(delay, self._connect_and_send)
 
+    def _default_standby_pose_file(self):
+        try:
+            from ament_index_python.packages import get_package_share_directory
+            return os.path.join(
+                get_package_share_directory("rm_dualarm"),
+                "config",
+                "standby_pose.yaml",
+            )
+        except Exception:
+            return os.path.join(
+                os.path.dirname(os.path.dirname(__file__)),
+                "config",
+                "standby_pose.yaml",
+            )
+
+    def _load_standby_joints(self):
+        path = self.get_parameter("standby_pose_file").value
+        if not path:
+            path = self._default_standby_pose_file()
+        if not os.path.exists(path):
+            self.get_logger().fatal(f"Standby pose file not found: {path}")
+            rclpy.shutdown()
+            raise RuntimeError(f"standby pose file not found: {path}")
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        joints = data.get("joints", data)
+        missing = [name for name in _EXPECTED_JOINTS if name not in joints]
+        if missing:
+            raise RuntimeError(
+                f"Standby pose file {path} missing joints: {', '.join(missing)}"
+            )
+        loaded = {name: float(joints[name]) for name in _EXPECTED_JOINTS}
+        self.get_logger().info(f"Loaded standby pose: {path}")
+        return loaded
+
     def _make_targets(self):
         if self._control_mode == "dual":
             return [
                 (group, {
                     f"{prefix}{joint}": position
-                    for joint, position in _BASE_INIT_JOINTS.items()
+                    for joint, position in self._base_init_joints.items()
                 })
                 for group, prefix in _DUAL_TARGETS
             ]
-        return [(_PLANNING_GROUP, dict(_BASE_INIT_JOINTS))]
+        return [(_PLANNING_GROUP, dict(self._base_init_joints))]
 
     def _connect_and_send(self):
         self._init_timer.cancel()   # one-shot (oneshot= not in Humble)

@@ -34,6 +34,7 @@ def generate_launch_description():
     ld.add_action(
         DeclareLaunchArgument("use_pose_init", default_value="true")
     )
+    ld.add_action(DeclareLaunchArgument("standby_pose_file", default_value=""))
     ld.add_action(DeclareLaunchArgument(
         "control_mode",
         default_value="single",
@@ -126,6 +127,7 @@ def generate_launch_description():
         output="screen",
         parameters=[{
             "delay_seconds": LaunchConfiguration("init_delay"),
+            "standby_pose_file": LaunchConfiguration("standby_pose_file"),
             "use_sim_time": True,
         }],
         condition=IfCondition(PythonExpression([
