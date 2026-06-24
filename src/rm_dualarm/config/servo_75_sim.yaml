@@ -12,12 +12,12 @@ use_gazebo: true
 # For direct servo_node_main (servo_type=twist) this also works.
 command_in_type: "speed_units"
 scale:
-  linear: 0.2                    # Max linear velocity [m/s]
-  rotational: 0.2                # Max rotational velocity [rad/s]
-  joint: 0.5                      # Max joint velocity [rad/s]
+  linear: 0.5                    # Max linear velocity [m/s]
+  rotational: 0.3                # Max rotational velocity [rad/s]
+  joint: 0.8                      # Max joint velocity [rad/s]
 
 # ---- Outgoing command properties ----
-publish_period: 0.04
+publish_period: 0.1
 low_latency_mode: true
 
 command_out_type: trajectory_msgs/JointTrajectory

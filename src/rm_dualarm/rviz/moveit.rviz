@@ -4,9 +4,7 @@ Panels:
     Name: Displays
     Property Tree Widget:
       Expanded:
-        - /MotionPlanning1
         - /TF1
-        - /Pose1
         - /Marker1
       Splitter Ratio: 0.6147058606147766
     Tree Height: 865
@@ -69,46 +67,90 @@ Visualization Manager:
           Expand Link Details: false
           Expand Tree: false
           Link Tree Style: Links in Alphabetic Order
-          Link1:
+          left_Link1:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          Link2:
+          left_Link2:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          Link3:
+          left_Link3:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          Link4:
+          left_Link4:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          Link5:
+          left_Link5:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          Link6:
+          left_Link6:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          Link7:
+          left_Link7:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          base_link:
+          left_base_link:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
+          right_Link1:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          right_Link2:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          right_Link3:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          right_Link4:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          right_Link5:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          right_Link6:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          right_Link7:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          right_base_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          world:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
         Loop Animation: true
         Robot Alpha: 0.5
         Robot Color: 150; 50; 150
@@ -132,7 +174,7 @@ Visualization Manager:
         Goal State Color: 250; 128; 0
         Interactive Marker Size: 0
         Joint Violation Color: 255; 0; 255
-        Planning Group: rm_group
+        Planning Group: left_rm_group
         Query Goal State: false
         Query Start State: false
         Show Workspace: false
@@ -155,46 +197,90 @@ Visualization Manager:
           Expand Link Details: false
           Expand Tree: false
           Link Tree Style: Links in Alphabetic Order
-          Link1:
+          left_Link1:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          Link2:
+          left_Link2:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          Link3:
+          left_Link3:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          Link4:
+          left_Link4:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          Link5:
+          left_Link5:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          Link6:
+          left_Link6:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          Link7:
+          left_Link7:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          base_link:
+          left_base_link:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
+          right_Link1:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          right_Link2:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          right_Link3:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          right_Link4:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          right_Link5:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          right_Link6:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          right_Link7:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          right_base_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          world:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
         Robot Alpha: 0.5
         Show Robot Collision: false
         Show Robot Visual: true
@@ -205,21 +291,37 @@ Visualization Manager:
       Frame Timeout: 15
       Frames:
         All Enabled: true
-        Link1:
+        left_Link1:
           Value: true
-        Link2:
+        left_Link2:
           Value: true
-        Link3:
+        left_Link3:
           Value: true
-        Link4:
+        left_Link4:
           Value: true
-        Link5:
+        left_Link5:
           Value: true
-        Link6:
+        left_Link6:
           Value: true
-        Link7:
+        left_Link7:
           Value: true
-        base_link:
+        left_base_link:
+          Value: true
+        right_Link1:
+          Value: true
+        right_Link2:
+          Value: true
+        right_Link3:
+          Value: true
+        right_Link4:
+          Value: true
+        right_Link5:
+          Value: true
+        right_Link6:
+          Value: true
+        right_Link7:
+          Value: true
+        right_base_link:
           Value: true
         world:
           Value: true
@@ -230,14 +332,23 @@ Visualization Manager:
       Show Names: false
       Tree:
         world:
-          base_link:
-            Link1:
-              Link2:
-                Link3:
-                  Link4:
-                    Link5:
-                      Link6:
-                        Link7:
+          left_base_link:
+            left_Link1:
+              left_Link2:
+                left_Link3:
+                  left_Link4:
+                    left_Link5:
+                      left_Link6:
+                        left_Link7:
+                          {}
+          right_base_link:
+            right_Link1:
+              right_Link2:
+                right_Link3:
+                  right_Link4:
+                    right_Link5:
+                      right_Link6:
+                        right_Link7:
                           {}
       Update Interval: 0
       Value: true
@@ -259,7 +370,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /target_pose
+        Value: /left/target_pose
       Value: true
     - Class: rviz_default_plugins/Marker
       Enabled: true
@@ -272,12 +383,45 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /pose_tracking/safe_zone
+        Value: /left/pose_tracking/safe_zone
+      Value: true
+    - Alpha: 1
+      Axes Length: 0.029999999329447746
+      Axes Radius: 0.019999999552965164
+      Class: rviz_default_plugins/Pose
+      Color: 255; 25; 0
+      Enabled: true
+      Head Length: 0.029999999329447746
+      Head Radius: 0.019999999552965164
+      Name: Pose
+      Shaft Length: 1
+      Shaft Radius: 0.05000000074505806
+      Shape: Axes
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /right/target_pose
+      Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: Marker
+      Namespaces:
+        safe_zone: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /right/pose_tracking/safe_zone
       Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: base_link
+    Fixed Frame: world
     Frame Rate: 30
   Name: root
   Tools:
@@ -292,25 +436,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 1.828343391418457
+      Distance: 3.014604330062866
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 0.045751966536045074
-        Y: 0.20073989033699036
-        Z: 0.3043597340583801
+        X: 0.1689276248216629
+        Y: -0.10573259741067886
+        Z: 0.4271560311317444
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.31000012159347534
+      Pitch: 0.6299999952316284
       Target Frame: base_link
       Value: Orbit (rviz_default_plugins)
-      Yaw: 5.015178203582764
+      Yaw: 5.500181674957275
     Saved: ~
 Window Geometry:
   Displays:

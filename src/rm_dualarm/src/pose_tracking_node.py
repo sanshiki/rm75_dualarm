@@ -34,6 +34,43 @@ def _quat_to_euler(x, y, z, w):
     return roll, pitch, yaw
 
 
+def _normalize_quat(q):
+    norm = math.sqrt(sum(v * v for v in q))
+    if norm < 1e-9:
+        return (0.0, 0.0, 0.0, 1.0)
+    return tuple(v / norm for v in q)
+
+
+def _quat_conjugate(q):
+    return (-q[0], -q[1], -q[2], q[3])
+
+
+def _quat_multiply(a, b):
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return (
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz,
+    )
+
+
+def _quat_error_vector(target, current):
+    """Return shortest-path axis-angle error vector target * inverse(current)."""
+    target = _normalize_quat(target)
+    current = _normalize_quat(current)
+    q_err = _normalize_quat(_quat_multiply(target, _quat_conjugate(current)))
+    if q_err[3] < 0.0:
+        q_err = tuple(-v for v in q_err)
+    x, y, z, w = q_err
+    sin_half = math.sqrt(x * x + y * y + z * z)
+    if sin_half < 1e-9:
+        return 0.0, 0.0, 0.0
+    angle = 2.0 * math.atan2(sin_half, w)
+    return angle * x / sin_half, angle * y / sin_half, angle * z / sin_half
+
+
 class PID1D:
     """Single-axis PID controller with anti-windup."""
     def __init__(self, kp, ki, kd, windup):
@@ -73,12 +110,14 @@ class PoseTrackingNode(Node):
         self.declare_parameter("angular_proportional_gain", 0.5)
         self.declare_parameter("angular_integral_gain", 0.0)
         self.declare_parameter("angular_derivative_gain", 0.0)
+        self.declare_parameter("orientation_tracking_mode", "full_quat")
         self.declare_parameter("windup_limit", 0.05)
         self.declare_parameter("ee_frame", "Link7")
         self.declare_parameter("base_frame", "base_link")
         self.declare_parameter("publish_rate", 50.0)
         self.declare_parameter("target_topic", "/target_pose")
         self.declare_parameter("twist_topic", "/servo_node/delta_twist_cmds")
+        self.declare_parameter("safe_zone_topic", "/pose_tracking/safe_zone")
         self.declare_parameter("max_linear", 0.2)
         self.declare_parameter("max_angular", 0.5)
 
@@ -113,6 +152,18 @@ class PoseTrackingNode(Node):
             self.get_parameter("angular_proportional_gain").value,
             self.get_parameter("angular_integral_gain").value,
             self.get_parameter("angular_derivative_gain").value, wu)
+        self._pid_ang_x = PID1D(
+            self.get_parameter("angular_proportional_gain").value,
+            self.get_parameter("angular_integral_gain").value,
+            self.get_parameter("angular_derivative_gain").value, wu)
+        self._pid_ang_y = PID1D(
+            self.get_parameter("angular_proportional_gain").value,
+            self.get_parameter("angular_integral_gain").value,
+            self.get_parameter("angular_derivative_gain").value, wu)
+        self._pid_ang_z = PID1D(
+            self.get_parameter("angular_proportional_gain").value,
+            self.get_parameter("angular_integral_gain").value,
+            self.get_parameter("angular_derivative_gain").value, wu)
 
         self._ee_frame = self.get_parameter("ee_frame").value
         self._base_frame = self.get_parameter("base_frame").value
@@ -128,6 +179,12 @@ class PoseTrackingNode(Node):
         self._filter_on = self.get_parameter("filter_enabled").value
         self._filter_a = self.get_parameter("filter_alpha").value
         self._filter_a = max(0.0, min(1.0, self._filter_a))
+        self._safe_zone_topic = self.get_parameter("safe_zone_topic").value
+        self._orientation_mode = self.get_parameter("orientation_tracking_mode").value
+        if self._orientation_mode not in ("full_quat", "yaw_only"):
+            self.get_logger().warn(
+                f"Unknown orientation_tracking_mode={self._orientation_mode}; using full_quat")
+            self._orientation_mode = "full_quat"
 
         # ---- Filter state (6-DOF: vx,vy,vz,wx,wy,wz) ----
         self._filt = [0.0] * 6
@@ -145,7 +202,7 @@ class PoseTrackingNode(Node):
         self._twist_pub = self.create_publisher(
             TwistStamped, self.get_parameter("twist_topic").value, 10)
         self._viz_pub = self.create_publisher(
-            Marker, "/pose_tracking/safe_zone", 1)
+            Marker, self._safe_zone_topic, 1)
         self.create_subscription(
             PoseStamped, self.get_parameter("target_topic").value,
             self._target_cb, 10)
@@ -161,6 +218,7 @@ class PoseTrackingNode(Node):
         self.get_logger().info(
             f"pose_tracking ready | ee={self._ee_frame} "
             f"| P=({self._pid_x.kp:.1f},{self._pid_y.kp:.1f},{self._pid_z.kp:.1f},{self._pid_ang.kp:.1f}) "
+            f"| orientation={self._orientation_mode} "
             f"| filter={'on' if self._filter_on else 'off'} (α={self._filter_a:.2f}) "
             f"| safe={'on' if self._safe_on else 'off'} "
             f"X=[{self._sx_min:.2f},{self._sx_max:.2f}] "
@@ -232,7 +290,7 @@ class PoseTrackingNode(Node):
 
     # ==================================================================
     def _get_ee_pose(self):
-        """Return current EE (x, y, z, roll, pitch, yaw) from TF."""
+        """Return current EE (x, y, z, roll, pitch, yaw, quat) from TF."""
         try:
             now = Time()
             t = self._tf_buf.lookup_transform(
@@ -245,7 +303,7 @@ class PoseTrackingNode(Node):
         z = t.transform.translation.z
         r = t.transform.rotation
         roll, pitch, yaw = _quat_to_euler(r.x, r.y, r.z, r.w)
-        return (x, y, z, roll, pitch, yaw)
+        return (x, y, z, roll, pitch, yaw, (r.x, r.y, r.z, r.w))
 
     # ==================================================================
     def _tick(self):
@@ -264,13 +322,16 @@ class PoseTrackingNode(Node):
             self._pid_y.reset()
             self._pid_z.reset()
             self._pid_ang.reset()
+            self._pid_ang_x.reset()
+            self._pid_ang_y.reset()
+            self._pid_ang_z.reset()
             self._publish_twist(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, now)
             return
 
         ee = self._get_ee_pose()
         if ee is None:
             return
-        ex, ey, ez, eroll, epitch, eyaw = ee
+        ex, ey, ez, eroll, epitch, eyaw, current_q = ee
 
         # Position error — clamp target to safe zone first
         tx = self._target.pose.position.x
@@ -284,26 +345,39 @@ class PoseTrackingNode(Node):
         err_y = ty - ey
         err_z = tz - ez
 
-        # Orientation error (yaw only — roll/pitch held at 0 for safety)
+        # Orientation error.
         tq = self._target.pose.orientation
-        _, _, tyaw = _quat_to_euler(tq.x, tq.y, tq.z, tq.w)
-        ang_err = tyaw - eyaw
-        # Wrap to [-pi, pi]
-        ang_err = math.atan2(math.sin(ang_err), math.cos(ang_err))
+        if self._orientation_mode == "yaw_only":
+            _, _, tyaw = _quat_to_euler(tq.x, tq.y, tq.z, tq.w)
+            ang_err = tyaw - eyaw
+            ang_err = math.atan2(math.sin(ang_err), math.cos(ang_err))
+            ang_err_x, ang_err_y, ang_err_z = 0.0, 0.0, ang_err
+        else:
+            ang_err_x, ang_err_y, ang_err_z = _quat_error_vector(
+                (tq.x, tq.y, tq.z, tq.w), current_q)
 
         # PID
         vx = self._pid_x.update(err_x, dt)
         vy = self._pid_y.update(err_y, dt)
         vz = self._pid_z.update(err_z, dt)
-        vw = self._pid_ang.update(ang_err, dt)
+        if self._orientation_mode == "yaw_only":
+            vw_x = 0.0
+            vw_y = 0.0
+            vw_z = self._pid_ang.update(ang_err_z, dt)
+        else:
+            vw_x = self._pid_ang_x.update(ang_err_x, dt)
+            vw_y = self._pid_ang_y.update(ang_err_y, dt)
+            vw_z = self._pid_ang_z.update(ang_err_z, dt)
 
         # Clamp
         vx = max(-self._max_lin, min(self._max_lin, vx))
         vy = max(-self._max_lin, min(self._max_lin, vy))
         vz = max(-self._max_lin, min(self._max_lin, vz))
-        vw = max(-self._max_ang, min(self._max_ang, vw))
+        vw_x = max(-self._max_ang, min(self._max_ang, vw_x))
+        vw_y = max(-self._max_ang, min(self._max_ang, vw_y))
+        vw_z = max(-self._max_ang, min(self._max_ang, vw_z))
 
-        self._publish_twist(vx, vy, vz, 0.0, 0.0, vw, now)
+        self._publish_twist(vx, vy, vz, vw_x, vw_y, vw_z, now)
 
     def _apply_filter(self, vx, vy, vz, wx, wy, wz):
         """First-order low-pass: y[n] = α·x[n] + (1-α)·y[n-1]."""

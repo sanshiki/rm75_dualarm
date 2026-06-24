@@ -17,6 +17,18 @@ mouse_teleop:
     fixed_qy: 0.0              # Fixed orientation quaternion Y
     fixed_qz: 0.0              # Fixed orientation quaternion Z
     fixed_qw: 1.0              # Fixed orientation quaternion W (identity)
-    publish_rate: 100.0         # Publish rate [Hz]
+    publish_rate: 50.0         # Publish rate [Hz]
+    control_mode: dual        # single | dual
     target_topic: /target_pose # Where servo_pose_tracking_demo listens
+    left_target_topic: /left/target_pose
+    right_target_topic: /right/target_pose
+    active_topic: /teleop_active
+    left_active_topic: /left/teleop_active
+    right_active_topic: /right/teleop_active
     base_frame: base_link      # Reference frame for PoseStamped
+    left_base_frame: left_base_link
+    right_base_frame: right_base_link
+    ee_frame: Link7
+    left_ee_frame: left_Link7
+    right_ee_frame: right_Link7
+    dual_y_offset: 0.25        # Mouse test offset between left/right targets [m]

@@ -1,0 +1,4 @@
+# Dual-arm simulation layout in the Gazebo world frame.
+base_x: 0.0
+base_z: 0.0
+base_spacing_y: 0.60

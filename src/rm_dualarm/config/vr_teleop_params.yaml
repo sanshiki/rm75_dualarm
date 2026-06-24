@@ -21,13 +21,26 @@ vr_base_broadcaster:
 # ---- VR teleop node (hand TF → /target_pose) ----
 vr_teleop:
   ros__parameters:
+    control_mode: dual
     target_topic: /target_pose
+    left_target_topic: /left/target_pose
+    right_target_topic: /right/target_pose
+    active_topic: /teleop_active
+    left_active_topic: /left/teleop_active
+    right_active_topic: /right/teleop_active
+    left_gripper_topic: /left/gripper_cmd
+    right_gripper_topic: /right/gripper_cmd
     joy_topic: /quest/joystick
     vr_base_frame: vr_base
     vr_origin_frame: vr_origin
     vr_hand_frame: hand_right
+    left_vr_hand_frame: hand_left
+    right_vr_hand_frame: hand_right
     base_frame: base_link
+    left_base_frame: left_base_link
+    right_base_frame: right_base_link
     publish_rate: 50.0
     p_sensitivity: 4.0
     q_sensitivity: 4.0
     user_height: 1.75
+    dual_y_offset: 0.2

@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Move the RM75 arm to a fixed non-singular joint pose via move_group.
+"""Move RM75 arm(s) to a fixed non-singular joint pose via move_group.
 
 Call this BEFORE launching servo_sim to initialise the arm away from
 the singular zero position::
 
     ros2 run rm_dualarm pose_init.py
+
+For dual-arm simulation, pass ``control_mode:=dual``. The same standby
+joint pose is sent to ``left_rm_group`` and ``right_rm_group`` with the
+matching joint-name prefixes.
 """
 
 import sys
@@ -21,9 +25,8 @@ from moveit_msgs.msg import (
 from builtin_interfaces.msg import Duration
 
 
-# Fixed non-singular pose — joint order as move_group expects
-# (joint1..joint7 from the rm_group planning group).
-_INIT_JOINTS = {
+# Fixed non-singular pose, using unprefixed RM75 joint names.
+_BASE_INIT_JOINTS = {
     "joint1": -0.022524496509642944,
     "joint2":  0.263926554708664440,
     "joint3": -0.011319336648978329,
@@ -36,6 +39,10 @@ _INIT_JOINTS = {
 _PLANNING_GROUP = "rm_group"
 _EXPECTED_JOINTS = ["joint1", "joint2", "joint3", "joint4",
                     "joint5", "joint6", "joint7"]
+_DUAL_TARGETS = [
+    ("left_rm_group", "left_"),
+    ("right_rm_group", "right_"),
+]
 
 
 class PoseInitNode(Node):
@@ -45,12 +52,29 @@ class PoseInitNode(Node):
         super().__init__("pose_init")
 
         self.declare_parameter("delay_seconds", 15.0)
+        self.declare_parameter("control_mode", "single")
         delay = self.get_parameter("delay_seconds").value
+        self._control_mode = self.get_parameter("control_mode").value
+        self._targets = self._make_targets()
+        self._target_index = 0
+        self._action = None
 
         self.get_logger().info(
-            f"Waiting {delay:.0f} s for Gazebo + move_group to stabilise ..."
+            f"Waiting {delay:.0f} s for Gazebo + move_group to stabilise "
+            f"({self._control_mode}, {len(self._targets)} target(s)) ..."
         )
         self._init_timer = self.create_timer(delay, self._connect_and_send)
+
+    def _make_targets(self):
+        if self._control_mode == "dual":
+            return [
+                (group, {
+                    f"{prefix}{joint}": position
+                    for joint, position in _BASE_INIT_JOINTS.items()
+                })
+                for group, prefix in _DUAL_TARGETS
+            ]
+        return [(_PLANNING_GROUP, dict(_BASE_INIT_JOINTS))]
 
     def _connect_and_send(self):
         self._init_timer.cancel()   # one-shot (oneshot= not in Humble)
@@ -62,15 +86,21 @@ class PoseInitNode(Node):
             )
             rclpy.shutdown()
             return
-        self.get_logger().info("move_group found, sending goal ...")
-        self.send_goal()
+        self.get_logger().info("move_group found, sending standby goal(s) ...")
+        self.send_next_goal()
 
-    def send_goal(self):
+    def send_next_goal(self):
+        if self._target_index >= len(self._targets):
+            self.get_logger().info("Pose init SUCCESS — all arm(s) in position")
+            rclpy.shutdown()
+            return
+
+        group_name, joint_positions = self._targets[self._target_index]
         goal = MoveGroup.Goal()
 
         # ---- Request ----
         goal.request = MotionPlanRequest()
-        goal.request.group_name = _PLANNING_GROUP
+        goal.request.group_name = group_name
         goal.request.num_planning_attempts = 5
         goal.request.allowed_planning_time = 5.0
         goal.request.max_velocity_scaling_factor = 0.5
@@ -78,10 +108,10 @@ class PoseInitNode(Node):
 
         # Joint constraints — one per joint
         constraints = Constraints()
-        for jn in _EXPECTED_JOINTS:
+        for jn in joint_positions:
             jc = JointConstraint()
             jc.joint_name = jn
-            jc.position = _INIT_JOINTS[jn]
+            jc.position = joint_positions[jn]
             jc.tolerance_above = 0.01
             jc.tolerance_below = 0.01
             jc.weight = 1.0
@@ -97,9 +127,9 @@ class PoseInitNode(Node):
         goal.planning_options.replan_delay = 1.0
 
         self.get_logger().info(
-            "Goal joints: " +
-            ", ".join(f"{jn}={_INIT_JOINTS[jn]:.3f}"
-                      for jn in _EXPECTED_JOINTS[:4]) +
+            f"[{group_name}] goal joints: " +
+            ", ".join(f"{jn}={joint_positions[jn]:.3f}"
+                      for jn in list(joint_positions)[:4]) +
             " ..."
         )
 
@@ -119,12 +149,16 @@ class PoseInitNode(Node):
     def _result_cb(self, future):
         result = future.result().result
         if result.error_code.val == result.error_code.SUCCESS:
-            self.get_logger().info("Pose init SUCCESS — arm in position")
+            group_name, _ = self._targets[self._target_index]
+            self.get_logger().info(f"[{group_name}] standby pose reached")
+            self._target_index += 1
+            self.send_next_goal()
         else:
+            group_name, _ = self._targets[self._target_index]
             self.get_logger().error(
-                f"Pose init FAILED: error_code={result.error_code.val}"
+                f"[{group_name}] pose init FAILED: error_code={result.error_code.val}"
             )
-        rclpy.shutdown()
+            rclpy.shutdown()
 
 
 def main():

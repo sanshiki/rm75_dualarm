@@ -23,7 +23,8 @@ y_derivative_gain: 0.1
 z_derivative_gain: 0.1
 
 # ---- Orientation PID gains ----
-angular_proportional_gain: 0.5
+orientation_tracking_mode: full_quat # full_quat | yaw_only
+angular_proportional_gain: 1.5
 angular_integral_gain: 0.0
 angular_derivative_gain: 0.0
 

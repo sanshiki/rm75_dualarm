@@ -1,0 +1,16 @@
+# VR hand pose to robot target pose calibration.
+enabled: true
+
+# When true, map hands in an operator-centric way so moving hands toward each
+# other maps to robot targets moving toward each other without crossing arms.
+mirror_convergence: true
+
+left:
+  position_scale: [1.0, 1.0, 1.0]
+  position_offset: [0.0, 0.0, 0.0]
+  rotation_offset_quat: [0.0, 0.0, 0.0, 1.0]
+
+right:
+  position_scale: [1.0, 1.0, 1.0]
+  position_offset: [0.0, 0.0, 0.0]
+  rotation_offset_quat: [0.0, 0.0, 0.0, 1.0]

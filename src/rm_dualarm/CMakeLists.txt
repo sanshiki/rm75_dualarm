@@ -48,6 +48,8 @@ install(PROGRAMS
   src/vr_teleop_node.py
   src/vr_base_broadcaster.py
   scripts/pose_init.py
+  scripts/vr_calibration_capture.py
+  scripts/analyze_dual_teleop_bag.py
   scripts/relay_receiver.py
   scripts/trajectory_relay.py
   DESTINATION lib/${PROJECT_NAME}
@@ -59,6 +61,7 @@ install(DIRECTORY
   config
   rviz
   DESTINATION share/${PROJECT_NAME}
+  PATTERN "__pycache__" EXCLUDE
 )
 
 # Install C++ target
