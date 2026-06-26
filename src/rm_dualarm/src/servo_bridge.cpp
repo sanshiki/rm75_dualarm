@@ -69,7 +69,7 @@ ServoBridge::ServoBridge(const rclcpp::NodeOptions & options)
 
   // ---- Publisher ----
   jointpos_pub_ = create_publisher<rm_ros_interfaces::msg::Jointpos>(
-    driver_topic, rclcpp::SensorDataQoS());
+    driver_topic, rclcpp::QoS(rclcpp::KeepLast(5)).reliable());
 
   // ---- Timer ----
   auto period = std::chrono::duration<double>(1.0 / publish_rate_);

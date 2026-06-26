@@ -30,7 +30,7 @@ ros2 launch rm_75_config gazebo_moveit_demo.launch.py
 
  - 真机
  ```bash
-ros2 launch rm_bringup rm_75_bringup.launch.py
+ros2 launch rm_dualarm real_bringup.launch.py arm_ip:=192.168.1.18
  ```
 
 ## rm_dualarm — 双臂伺服与遥操作
@@ -57,6 +57,21 @@ teleop (mouse/VR) → /target_pose (PoseStamped)
   → /right_rm_group_controller/joint_trajectory
 ```
 
+双臂真机数据流：
+
+```
+teleop → /left/target_pose, /right/target_pose
+  → left/right_pose_tracking → left/right_servo_node
+  → left/right_servo_bridge → /left/rm_driver/movej_canfd_cmd
+                             → /right/rm_driver/movej_canfd_cmd
+  → 左臂 (left_arm_ip) + 右臂 (right_arm_ip)
+
+反馈:
+  /left/joint_states + /right/joint_states
+  → dual_joint_state_merger → /joint_states (left_joint1..7, right_joint1..7)
+  → robot_state_publisher → TF (left_*, right_* frames)
+```
+
 ### 核心模块
 
 | 模块 | 文件 | 功能 |
@@ -67,6 +82,7 @@ teleop (mouse/VR) → /target_pose (PoseStamped)
 | servo_bridge | `src/servo_bridge.cpp` | Servo JointTrajectory → rm_driver CANFD (50Hz) |
 | pose_init | `scripts/pose_init.py` | 初始化机械臂到非奇异位姿 (move_group 规划) |
 | trajectory_relay | `scripts/trajectory_relay.py` | 门控转发，遥操激活后才开放 |
+| dual_joint_state_merger | `scripts/dual_joint_state_merger.py` | 合并左右臂 joint_states 并加前缀 |
 
 ### 启动
 
@@ -161,11 +177,29 @@ ros2 launch rm_dualarm dual_sim_bringup.launch.py gazebo_gui:=false
 ### 真机与 VR Relay
 
 ```bash
-# === 真机 ===
-# T1: 驱动
-ros2 launch rm_driver rm_75_driver.launch.py
+# === 单臂真机 ===
+# T1: 真机 bringup (rm_driver + rm_control + move_group + 可选 pose_init)
+ros2 launch rm_dualarm real_bringup.launch.py arm_ip:=192.168.1.18
 # T2: Servo + 遥操作
-ros2 launch rm_dualarm servo_real.launch.py teleop_type:=mouse
+ros2 launch rm_dualarm servo_real.launch.py control_mode:=single teleop_type:=mouse
+
+# T1 (可选): 带待机位初始化
+ros2 launch rm_dualarm real_bringup.launch.py arm_ip:=192.168.1.18 use_pose_init:=true
+
+# === 双臂真机 ===
+# T1: 双臂 bringup (两个 rm_driver + joint_state_merger + move_group)
+ros2 launch rm_dualarm dual_real_bringup.launch.py \
+    left_arm_ip:=192.168.1.18 right_arm_ip:=192.168.1.19
+# T2: 双臂 Servo + 遥操作
+ros2 launch rm_dualarm servo_real.launch.py control_mode:=dual teleop_type:=mouse
+
+# 双臂带待机位初始化
+ros2 launch rm_dualarm dual_real_bringup.launch.py \
+    left_arm_ip:=192.168.1.18 right_arm_ip:=192.168.1.19 use_pose_init:=true
+
+# 双臂间距覆盖 (物理底座间距)
+ros2 launch rm_dualarm dual_real_bringup.launch.py base_spacing_y:=0.90
+ros2 launch rm_dualarm servo_real.launch.py control_mode:=dual base_spacing_y:=0.90
 
 # === VR 遥操作 ===
 # T1 (宿主机): 启动 relay_receiver + broadcaster + vr_teleop

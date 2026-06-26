@@ -50,6 +50,7 @@ install(PROGRAMS
   scripts/pose_init.py
   scripts/vr_calibration_capture.py
   scripts/analyze_dual_teleop_bag.py
+  scripts/dual_joint_state_merger.py
   scripts/relay_receiver.py
   scripts/trajectory_relay.py
   DESTINATION lib/${PROJECT_NAME}

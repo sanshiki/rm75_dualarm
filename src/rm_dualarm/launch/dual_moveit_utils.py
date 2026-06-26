@@ -175,3 +175,77 @@ def dual_moveit_config(pkg_share, layout=None):
     config["robot_description_kinematics"] = kinematics
     config["moveit_simple_controller_manager"] = moveit_controllers
     return config
+
+
+# ================================================================
+# Real-robot dual-arm URDF builder
+# ================================================================
+# Uses the pure kinematic URDF (rm_description/urdf/rm_75.urdf)
+# instead of the Gazebo xacro.  No world link removal, no gazebo
+# plugin injection — the real URDF is already clean.
+
+
+def build_dual_real_robot_description(pkg_share, layout=None):
+    """Build a dual-arm URDF from the real kinematic rm_75 description."""
+    layout = layout or load_dual_arm_layout(pkg_share)
+    try:
+        rm_desc_share = get_package_share_directory("rm_description")
+    except Exception:
+        rm_desc_share = os.path.abspath(
+            os.path.join(pkg_share, "..", "ros2_rm_robot", "rm_description"))
+    urdf_path = os.path.join(rm_desc_share, "urdf", "rm_75.urdf")
+    source = ET.parse(urdf_path).getroot()
+
+    robot = ET.Element("robot", {"name": "rm_75_dualarm"})
+    ET.SubElement(robot, "link", {"name": "world"})
+
+    left = copy.deepcopy(source)
+    right = copy.deepcopy(source)
+    base_x = float(layout.get("base_x", 0.0))
+    base_z = float(layout.get("base_z", 0.0))
+    half_y = float(layout.get("base_spacing_y", 0.60)) / 2.0
+    robot.append(_prefix_robot(left, "left_", f"{base_x} {half_y} {base_z}"))
+    robot.append(_prefix_robot(right, "right_", f"{base_x} {-half_y} {base_z}"))
+    for child in list(left):
+        robot.append(child)
+    for child in list(right):
+        robot.append(child)
+
+    return ET.tostring(robot, encoding="unicode")
+
+
+def dual_real_moveit_config(pkg_share, layout=None):
+    """Return a dual-arm MoveIt config dict built from the real URDF."""
+    robot_description = build_dual_real_robot_description(pkg_share, layout)
+    rm75_config = MoveItConfigsBuilder(
+        "rm_75_description", package_name="rm_75_config").to_moveit_configs()
+    config = rm75_config.to_dict()
+    srdf = _build_dual_srdf(config)
+    kinematics = config.get("robot_description_kinematics", {})
+    if "rm_group" in kinematics:
+        kinematics["left_rm_group"] = dict(kinematics["rm_group"])
+        kinematics["right_rm_group"] = dict(kinematics["rm_group"])
+        kinematics.pop("rm_group", None)
+    moveit_controllers = {
+        "controller_names": [
+            "left_rm_group_controller",
+            "right_rm_group_controller",
+        ],
+        "left_rm_group_controller": {
+            "type": "FollowJointTrajectory",
+            "action_ns": "follow_joint_trajectory",
+            "default": True,
+            "joints": [f"left_joint{i}" for i in range(1, 8)],
+        },
+        "right_rm_group_controller": {
+            "type": "FollowJointTrajectory",
+            "action_ns": "follow_joint_trajectory",
+            "default": True,
+            "joints": [f"right_joint{i}" for i in range(1, 8)],
+        },
+    }
+    config["robot_description"] = robot_description
+    config["robot_description_semantic"] = srdf
+    config["robot_description_kinematics"] = kinematics
+    config["moveit_simple_controller_manager"] = moveit_controllers
+    return config

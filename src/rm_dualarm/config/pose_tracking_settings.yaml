@@ -42,3 +42,10 @@ y_min: -0.30
 y_max: 0.30
 z_min: 0.30
 z_max: 0.50
+
+# ---- Soft-start ramp ----
+# Multiplies the output twist by a 0→1 coefficient that ramps up over
+# soft_start_ramp_time seconds.  Resets to 0 whenever target_pose is
+# absent for > 0.3 s (e.g. mouse released / VR deactivated).
+# Set to 0 to disable.
+soft_start_ramp_time: 2.0

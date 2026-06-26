@@ -134,6 +134,9 @@ class PoseTrackingNode(Node):
         self.declare_parameter("z_min", 0.10)
         self.declare_parameter("z_max", 0.80)
 
+        # ---- Soft-start ramp (0 → 1 over ramp_time seconds) ----
+        self.declare_parameter("soft_start_ramp_time", 2.0)    # 0.0 = disabled
+
         # Read params
         wu = self.get_parameter("windup_limit").value
         self._pid_x = PID1D(
@@ -180,6 +183,9 @@ class PoseTrackingNode(Node):
         self._filter_a = self.get_parameter("filter_alpha").value
         self._filter_a = max(0.0, min(1.0, self._filter_a))
         self._safe_zone_topic = self.get_parameter("safe_zone_topic").value
+        self._ramp_time = self.get_parameter("soft_start_ramp_time").value
+        if self._ramp_time < 0.001:
+            self._ramp_time = 0.0   # disabled
         self._orientation_mode = self.get_parameter("orientation_tracking_mode").value
         if self._orientation_mode not in ("full_quat", "yaw_only"):
             self.get_logger().warn(
@@ -189,6 +195,9 @@ class PoseTrackingNode(Node):
         # ---- Filter state (6-DOF: vx,vy,vz,wx,wy,wz) ----
         self._filt = [0.0] * 6
         self._filt_inited = False
+
+        # ---- Soft-start state ----
+        self._soft_start_scale = 0.0
 
         # ---- TF ----
         self._tf_buf = Buffer()
@@ -224,6 +233,7 @@ class PoseTrackingNode(Node):
             f"X=[{self._sx_min:.2f},{self._sx_max:.2f}] "
             f"Y=[{self._sy_min:.2f},{self._sy_max:.2f}] "
             f"Z=[{self._sz_min:.2f},{self._sz_max:.2f}]"
+            f"{' | soft_start=%.1fs' % self._ramp_time if self._ramp_time > 0.0 else ''}"
         )
 
     # ==================================================================
@@ -325,7 +335,10 @@ class PoseTrackingNode(Node):
             self._pid_ang_x.reset()
             self._pid_ang_y.reset()
             self._pid_ang_z.reset()
+            self._soft_start_scale = 0.0
             self._publish_twist(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, now)
+            # self.get_logger().warn(
+                # f"target_pose timeout ({elapsed:.2f}s); reset soft-start and PID integrators")
             return
 
         ee = self._get_ee_pose()
@@ -356,6 +369,13 @@ class PoseTrackingNode(Node):
             ang_err_x, ang_err_y, ang_err_z = _quat_error_vector(
                 (tq.x, tq.y, tq.z, tq.w), current_q)
 
+        # ---- Soft-start ramp ----
+        if self._ramp_time > 0.0:
+            self._soft_start_scale = min(
+                1.0, self._soft_start_scale + dt / self._ramp_time)
+        else:
+            self._soft_start_scale = 1.0
+
         # PID
         vx = self._pid_x.update(err_x, dt)
         vy = self._pid_y.update(err_y, dt)
@@ -376,6 +396,11 @@ class PoseTrackingNode(Node):
         vw_x = max(-self._max_ang, min(self._max_ang, vw_x))
         vw_y = max(-self._max_ang, min(self._max_ang, vw_y))
         vw_z = max(-self._max_ang, min(self._max_ang, vw_z))
+
+        # Apply soft-start scale
+        s = self._soft_start_scale
+        vx, vy, vz = vx * s, vy * s, vz * s
+        vw_x, vw_y, vw_z = vw_x * s, vw_y * s, vw_z * s
 
         self._publish_twist(vx, vy, vz, vw_x, vw_y, vw_z, now)
 

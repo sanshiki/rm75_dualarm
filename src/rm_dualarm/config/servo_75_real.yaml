@@ -1,25 +1,24 @@
 # ================================================================
-# MoveIt2 Servo configuration — RM75 real robot
+# MoveIt2 Servo configuration — RM75 on real hardware
 # ================================================================
-# Servo outputs JointTrajectory to servo_bridge, which converts to
-# Jointpos CANFD messages for rm_driver.
-#
-# Reference:
+# Refer to the official parameter documentation:
 #   /opt/ros/humble/include/moveit_servo/servo_parameters.h
 #   https://moveit.picknik.ai/humble/doc/examples/realtime_servo/realtime_servo_tutorial.html
 
 use_gazebo: false
 
 # ---- Incoming command properties ----
+# PoseTracking uses "speed_units" internally (PID outputs Twist in m/s, rad/s).
+# For direct servo_node_main (servo_type=twist) this also works.
 command_in_type: "speed_units"
 scale:
-  linear: 0.10                    # Reduced for real robot safety [m/s]
-  rotational: 0.2                # Reduced for real robot safety [rad/s]
-  joint: 0.5                      # Max joint velocity [rad/s]
+  linear: 0.05                    # Max linear velocity [m/s]
+  rotational: 0.1                # Max rotational velocity [rad/s]
+  joint: 0.2                      # Max joint velocity [rad/s]
 
 # ---- Outgoing command properties ----
-publish_period: 0.020             # 50 Hz
-low_latency_mode: false
+publish_period: 0.1
+low_latency_mode: true
 
 command_out_type: trajectory_msgs/JointTrajectory
 publish_joint_positions: true
@@ -30,6 +29,8 @@ publish_joint_accelerations: false
 smoothing_filter_plugin_name: "online_signal_smoothing::ButterworthFilterPlugin"
 
 # ---- Planning scene ----
+# true: servo reads /joint_states directly and computes FK itself.
+#       Avoids stale/incorrect EE pose from a missing move_group.
 is_primary_planning_scene_monitor: false
 
 # ---- MoveIt properties ----
@@ -45,8 +46,10 @@ incoming_command_timeout: 0.15
 num_outgoing_halt_msgs_to_publish: 4
 
 # ---- Singularity and joint limits ----
-lower_singularity_threshold: 17.0
-hard_stop_singularity_threshold: 30.0
+# 7-DOF arms have naturally higher condition numbers.
+# Increase thresholds to avoid false-positive emergency stops.
+lower_singularity_threshold: 35.0
+hard_stop_singularity_threshold: 60.0
 leaving_singularity_threshold_multiplier: 2.0
 joint_limit_margin: 0.1
 
@@ -58,7 +61,9 @@ status_topic: ~/status
 command_out_topic: /servo_bridge/joint_trajectory_in
 
 # ---- Collision checking ----
-check_collisions: true
+# Disabled initially to isolate potential crash causes.
+# Re-enable once basic servoing works.
+check_collisions: false
 collision_check_rate: 10.0
 self_collision_proximity_threshold: 0.01
 scene_collision_proximity_threshold: 0.02

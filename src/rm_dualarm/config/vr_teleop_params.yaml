@@ -39,7 +39,7 @@ vr_teleop:
     base_frame: base_link
     left_base_frame: left_base_link
     right_base_frame: right_base_link
-    publish_rate: 50.0
+    publish_rate: 100.0
     p_sensitivity: 4.0
     q_sensitivity: 4.0
     user_height: 1.75
