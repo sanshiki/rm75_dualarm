@@ -96,7 +96,7 @@ def generate_launch_description():
         ("right_driver_topic", "/right/rm_driver/movej_canfd_cmd"),
         ("vr_calibration_enabled", "true"),
         ("vr_calibration_file", ""),
-        ("mirror_mode", "false"),
+        ("mirror_mode", "true"),
         ("base_x", ""),
         ("base_z", ""),
         ("base_spacing_y", ""),

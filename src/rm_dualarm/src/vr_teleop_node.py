@@ -135,6 +135,7 @@ class VRTrackerNode(Node):
         self._activate_timer = None
         self._blocked = False
         self._mode = "normal"
+        self._mirror_x_home = {}       # {"left": x, "right": x} — X pivot per arm
         self._ee_pose = None          # latest from /ee_pose_visualize or TF
         self._last_pose = None        # for incremental delta calc
         self._last_poses = {}         # per-hand incremental state in dual mode
@@ -277,6 +278,8 @@ class VRTrackerNode(Node):
                 self._activate_cnt = 0
                 self._activate_timer.cancel()
                 self._activate_timer = None
+                if not self._activated:
+                    self._mirror_x_home.clear()
                 state = "ACTIVE" if self._activated else "IDLE"
                 self._publish_active(self._activated)
                 self.get_logger().info(f"VR teleop {state}")
@@ -354,31 +357,25 @@ class VRTrackerNode(Node):
         left_close = left_val > 0.5
         right_close = right_val > 0.5
 
-        # In mirror mode, left hand controls right arm → left trigger → right gripper
+        # Mirror mode (hand swap): left trigger → right gripper, right trigger → left gripper
         if self._mirror_mode:
-            primary_close, secondary_close = right_close, left_close
-            primary_pub, secondary_pub = self._right_gripper_driver_pub, self._left_gripper_driver_pub
-            primary_label, secondary_label = "Right", "Left"
+            left_pub, right_pub = self._right_gripper_driver_pub, self._left_gripper_driver_pub
         else:
-            primary_close, secondary_close = left_close, right_close
-            primary_pub, secondary_pub = self._left_gripper_driver_pub, self._right_gripper_driver_pub
-            primary_label, secondary_label = "Left", "Right"
+            left_pub, right_pub = self._left_gripper_driver_pub, self._right_gripper_driver_pub
 
-        if primary_close != self._last_left_gripper_closed:
-            self._last_left_gripper_closed = primary_close
-            pos = 100 if primary_close else 900
-            primary_pub.publish(
-                Gripperset(position=pos, block=False, timeout=0))
+        if left_close != self._last_left_gripper_closed:
+            self._last_left_gripper_closed = left_close
+            pos = 100 if left_close else 900
+            left_pub.publish(Gripperset(position=pos, block=False, timeout=0))
             self.get_logger().info(
-                f"{primary_label} gripper → {'CLOSE' if primary_close else 'OPEN'} (pos={pos})")
+                f"Left trigger → {'CLOSE' if left_close else 'OPEN'} (pos={pos})")
 
-        if secondary_close != self._last_right_gripper_closed:
-            self._last_right_gripper_closed = secondary_close
-            pos = 100 if secondary_close else 900
-            secondary_pub.publish(
-                Gripperset(position=pos, block=False, timeout=0))
+        if right_close != self._last_right_gripper_closed:
+            self._last_right_gripper_closed = right_close
+            pos = 100 if right_close else 900
+            right_pub.publish(Gripperset(position=pos, block=False, timeout=0))
             self.get_logger().info(
-                f"{secondary_label} gripper → {'CLOSE' if secondary_close else 'OPEN'} (pos={pos})")
+                f"Right trigger → {'CLOSE' if right_close else 'OPEN'} (pos={pos})")
 
     def _apply_calibration(self, side, pos, quat):
         if not self._calibration.get("enabled", False):
@@ -416,6 +413,19 @@ class VRTrackerNode(Node):
         roll, pitch, yaw = r.as_euler('xyz', degrees=False)
         mirrored = R.from_euler('xyz', [-roll, pitch, -yaw], degrees=False)
         return mirrored.as_quat()
+
+    def _apply_mirror_x(self, pose, side):
+        """Mirror X delta around the activation home position (face-to-face).
+
+        Captures the target X on first call per activation per side,
+        then reflects subsequent X movement: hand forward → target backward.
+        """
+        x = pose.pose.position.x
+        home = self._mirror_x_home.get(side)
+        if home is None:
+            self._mirror_x_home[side] = x
+            home = x
+        pose.pose.position.x = home - (x - home)  # = 2*home - x
 
     def _make_pose_msg(self, base_frame, position, quat):
         pose = PoseStamped()
@@ -527,6 +537,12 @@ class VRTrackerNode(Node):
                     self._left_hand_frame, self._left_base_frame, self._dual_y_offset, "left")
                 right_pose = self._pose_from_hand(
                     self._right_hand_frame, self._right_base_frame, -self._dual_y_offset, "right")
+
+        if self._mirror_mode:
+            if left_pose is not None:
+                self._apply_mirror_x(left_pose, "left")
+            if right_pose is not None:
+                self._apply_mirror_x(right_pose, "right")
 
         if left_pose is not None:
             self._left_pose_pub.publish(left_pose)

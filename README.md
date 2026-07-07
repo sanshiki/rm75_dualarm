@@ -35,15 +35,7 @@ ros2 launch rm_dualarm real_bringup.launch.py arm_ip:=192.168.1.18
 
  - 相机
 ```bash
-ros2 run v4l2_camera v4l2_camera_node \
-  --ros-args \
-  -r __ns:=/camera/global \
-  -p video_device:=/dev/v4l/by-id/usb-SN0002_2K_USB_Camera_46435000_P020300_SN0002-video-index0 \
-  -p image_size:="[640,480]" \
-  -p time_per_frame:="[1,30]" \
-  -p pixel_format:=MJPG \
-  -p output_encoding:=rgb8 \
-  -r image_raw:=color/image_raw
+ros2 launch rm_dualarm camera.launch.py 
 ```
 
 ## rm_dualarm — 双臂伺服与遥操作
