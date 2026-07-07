@@ -27,6 +27,7 @@ from rclpy.node import Node
 from rclpy.time import Time
 from rclpy.duration import Duration
 from geometry_msgs.msg import PoseStamped
+from rm_ros_interfaces.msg import Gripperset
 from sensor_msgs.msg import Joy
 from std_msgs.msg import Bool, Float32
 from tf2_ros import Buffer, TransformListener, TransformException
@@ -78,6 +79,8 @@ class VRTrackerNode(Node):
         self.declare_parameter("right_active_topic", "/right/teleop_active")
         self.declare_parameter("left_gripper_topic", "/left/gripper_cmd")
         self.declare_parameter("right_gripper_topic", "/right/gripper_cmd")
+        self.declare_parameter("left_gripper_driver_topic", "/left/rm_driver/set_gripper_position_cmd")
+        self.declare_parameter("right_gripper_driver_topic", "/right/rm_driver/set_gripper_position_cmd")
         self.declare_parameter("joy_topic", "/quest/joystick")
         self.declare_parameter("vr_base_frame", "vr_base")
         self.declare_parameter("vr_origin_frame", "vr_origin")
@@ -94,6 +97,7 @@ class VRTrackerNode(Node):
         self.declare_parameter("dual_y_offset", 0.0)
         self.declare_parameter("calibration_enabled", True)
         self.declare_parameter("calibration_file", "")
+        self.declare_parameter("mirror_mode", False)
 
         self._control_mode = self.get_parameter("control_mode").value
         self._target_topic = self.get_parameter("target_topic").value
@@ -104,6 +108,8 @@ class VRTrackerNode(Node):
         self._right_active_topic = self.get_parameter("right_active_topic").value
         self._left_gripper_topic = self.get_parameter("left_gripper_topic").value
         self._right_gripper_topic = self.get_parameter("right_gripper_topic").value
+        self._left_gripper_driver_topic = self.get_parameter("left_gripper_driver_topic").value
+        self._right_gripper_driver_topic = self.get_parameter("right_gripper_driver_topic").value
         self._vr_base = self.get_parameter("vr_base_frame").value
         self._vr_origin = self.get_parameter("vr_origin_frame").value
         self._hand_frame = self.get_parameter("vr_hand_frame").value
@@ -119,6 +125,7 @@ class VRTrackerNode(Node):
         self._dual_y_offset = self.get_parameter("dual_y_offset").value
         self._calibration_enabled = self.get_parameter("calibration_enabled").value
         self._calibration_file = self.get_parameter("calibration_file").value
+        self._mirror_mode = self.get_parameter("mirror_mode").value
         self._calibration = self._load_calibration()
 
         # ---- State ----
@@ -161,6 +168,12 @@ class VRTrackerNode(Node):
         self._right_active_pub = self.create_publisher(Bool, self._right_active_topic, 1)
         self._left_gripper_pub = self.create_publisher(Float32, self._left_gripper_topic, 1)
         self._right_gripper_pub = self.create_publisher(Float32, self._right_gripper_topic, 1)
+        self._left_gripper_driver_pub = self.create_publisher(
+            Gripperset, self._left_gripper_driver_topic, 1)
+        self._right_gripper_driver_pub = self.create_publisher(
+            Gripperset, self._right_gripper_driver_topic, 1)
+        self._last_left_gripper_closed = None   # debounce: only publish on change
+        self._last_right_gripper_closed = None
 
         # ---- Subscriber (VR joystick/buttons) ----
         self.create_subscription(Joy, self.get_parameter("joy_topic").value,
@@ -171,8 +184,9 @@ class VRTrackerNode(Node):
         self._ctrl_timer = self.create_timer(period, self._control_loop)
 
         self.get_logger().info(
-            f"VR teleop ready | control={self._control_mode} | mode={self._mode} | "
-            f"triple-press A to activate, B to switch mode, RB to block"
+            f"VR teleop ready | control={self._control_mode} | mode={self._mode}"
+            f"{' | MIRROR' if self._mirror_mode else ''}"
+            f" | triple-press A to activate, B to switch mode, RB to block"
         )
 
     def _load_calibration(self):
@@ -321,12 +335,50 @@ class VRTrackerNode(Node):
             self._active_pub.publish(msg)
 
     def _publish_gripper_placeholders(self):
-        """Publish normalized trigger placeholders for future gripper control."""
+        """Map LT/RT triggers → gripper open (900) / close (100).
+
+        Trigger value > 0.5  →  close (position=100)
+        Trigger value ≤ 0.5  →  open  (position=900)
+
+        Commands are only published on state change to avoid spamming."""
         if len(self._axes) < 6:
             return
-        # Provided mapping: axes[4]=LT, axes[5]=RT. Preserve as normalized commands.
-        self._left_gripper_pub.publish(Float32(data=float(self._axes[4])))
-        self._right_gripper_pub.publish(Float32(data=float(self._axes[5])))
+        left_val = float(self._axes[4])
+        right_val = float(self._axes[5])
+
+        # Keep Float32 placeholders for backward compat
+        self._left_gripper_pub.publish(Float32(data=left_val))
+        self._right_gripper_pub.publish(Float32(data=right_val))
+
+        # Gripperset open/close with debounce
+        left_close = left_val > 0.5
+        right_close = right_val > 0.5
+
+        # In mirror mode, left hand controls right arm → left trigger → right gripper
+        if self._mirror_mode:
+            primary_close, secondary_close = right_close, left_close
+            primary_pub, secondary_pub = self._right_gripper_driver_pub, self._left_gripper_driver_pub
+            primary_label, secondary_label = "Right", "Left"
+        else:
+            primary_close, secondary_close = left_close, right_close
+            primary_pub, secondary_pub = self._left_gripper_driver_pub, self._right_gripper_driver_pub
+            primary_label, secondary_label = "Left", "Right"
+
+        if primary_close != self._last_left_gripper_closed:
+            self._last_left_gripper_closed = primary_close
+            pos = 100 if primary_close else 900
+            primary_pub.publish(
+                Gripperset(position=pos, block=False, timeout=0))
+            self.get_logger().info(
+                f"{primary_label} gripper → {'CLOSE' if primary_close else 'OPEN'} (pos={pos})")
+
+        if secondary_close != self._last_right_gripper_closed:
+            self._last_right_gripper_closed = secondary_close
+            pos = 100 if secondary_close else 900
+            secondary_pub.publish(
+                Gripperset(position=pos, block=False, timeout=0))
+            self.get_logger().info(
+                f"{secondary_label} gripper → {'CLOSE' if secondary_close else 'OPEN'} (pos={pos})")
 
     def _apply_calibration(self, side, pos, quat):
         if not self._calibration.get("enabled", False):
@@ -357,6 +409,13 @@ class VRTrackerNode(Node):
             trans.transform.translation.z,
         ], dtype=float)
         return position, q_mapped
+
+    def _mirror_orientation(self, quat):
+        """Mirror orientation for face-to-face teleop: negate roll & yaw, keep pitch."""
+        r = R.from_quat(quat)
+        roll, pitch, yaw = r.as_euler('xyz', degrees=False)
+        mirrored = R.from_euler('xyz', [-roll, pitch, -yaw], degrees=False)
+        return mirrored.as_quat()
 
     def _make_pose_msg(self, base_frame, position, quat):
         pose = PoseStamped()
@@ -400,6 +459,11 @@ class VRTrackerNode(Node):
         if rotation_scale != 1.0:
             delta_r = R.from_rotvec(delta_r.as_rotvec() * rotation_scale)
         target_q = (delta_r * R.from_quat(ee_ref_q)).as_quat()
+
+        if self._mirror_mode:
+            target_p[1] = -target_p[1]
+            target_q = self._mirror_orientation(target_q)
+
         return self._make_pose_msg(base_frame, target_p, target_q)
 
     def _pose_from_hand(self, hand_frame, base_frame, y_offset=0.0, side="right"):
@@ -426,6 +490,10 @@ class VRTrackerNode(Node):
         ])
         position, q_mapped = self._apply_calibration(side, position, q_mapped)
 
+        if self._mirror_mode:
+            position[1] = -position[1]
+            q_mapped = self._mirror_orientation(q_mapped)
+
         return self._make_pose_msg(base_frame, position, q_mapped)
 
     def _normal_control(self):
@@ -436,16 +504,30 @@ class VRTrackerNode(Node):
         self._pose_pub.publish(pose)
 
     def _dual_normal_control(self):
-        if self._calibration.get("enabled") and self._calibration.get("schema_version") == 2:
-            left_pose = self._pose_from_calibrated_hand(
-                self._left_hand_frame, self._left_base_frame, "left")
-            right_pose = self._pose_from_calibrated_hand(
-                self._right_hand_frame, self._right_base_frame, "right")
+        if self._mirror_mode:
+            # Face-to-face: right hand → left arm, left hand → right arm
+            if self._calibration.get("enabled") and self._calibration.get("schema_version") == 2:
+                left_pose = self._pose_from_calibrated_hand(
+                    self._right_hand_frame, self._left_base_frame, "right")
+                right_pose = self._pose_from_calibrated_hand(
+                    self._left_hand_frame, self._right_base_frame, "left")
+            else:
+                left_pose = self._pose_from_hand(
+                    self._right_hand_frame, self._left_base_frame, -self._dual_y_offset, "right")
+                right_pose = self._pose_from_hand(
+                    self._left_hand_frame, self._right_base_frame, self._dual_y_offset, "left")
         else:
-            left_pose = self._pose_from_hand(
-                self._left_hand_frame, self._left_base_frame, self._dual_y_offset, "left")
-            right_pose = self._pose_from_hand(
-                self._right_hand_frame, self._right_base_frame, -self._dual_y_offset, "right")
+            if self._calibration.get("enabled") and self._calibration.get("schema_version") == 2:
+                left_pose = self._pose_from_calibrated_hand(
+                    self._left_hand_frame, self._left_base_frame, "left")
+                right_pose = self._pose_from_calibrated_hand(
+                    self._right_hand_frame, self._right_base_frame, "right")
+            else:
+                left_pose = self._pose_from_hand(
+                    self._left_hand_frame, self._left_base_frame, self._dual_y_offset, "left")
+                right_pose = self._pose_from_hand(
+                    self._right_hand_frame, self._right_base_frame, -self._dual_y_offset, "right")
+
         if left_pose is not None:
             self._left_pose_pub.publish(left_pose)
         if right_pose is not None:

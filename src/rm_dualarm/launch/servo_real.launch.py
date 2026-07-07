@@ -96,6 +96,7 @@ def generate_launch_description():
         ("right_driver_topic", "/right/rm_driver/movej_canfd_cmd"),
         ("vr_calibration_enabled", "true"),
         ("vr_calibration_file", ""),
+        ("mirror_mode", "false"),
         ("base_x", ""),
         ("base_z", ""),
         ("base_spacing_y", ""),
@@ -451,6 +452,7 @@ def generate_launch_description():
             "right_base_frame": LaunchConfiguration("right_base_frame"),
             "calibration_enabled": LaunchConfiguration("vr_calibration_enabled"),
             "calibration_file": LaunchConfiguration("vr_calibration_file"),
+            "mirror_mode": LaunchConfiguration("mirror_mode"),
         }.items(),
     )
     ld.add_action(vr_teleop_launch)

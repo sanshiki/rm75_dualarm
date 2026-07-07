@@ -54,6 +54,7 @@ def generate_launch_description():
     ld.add_action(DeclareLaunchArgument("dual_y_offset", default_value="0.0"))
     ld.add_action(DeclareLaunchArgument("calibration_enabled", default_value="true"))
     ld.add_action(DeclareLaunchArgument("calibration_file", default_value=""))
+    ld.add_action(DeclareLaunchArgument("mirror_mode", default_value="false"))
 
     # ================================================================
     # 1. Relay receiver (TCP JSON from Docker ROS 1 sender)
@@ -128,6 +129,7 @@ def generate_launch_description():
             "dual_y_offset": LaunchConfiguration("dual_y_offset"),
             "calibration_enabled": LaunchConfiguration("calibration_enabled"),
             "calibration_file": LaunchConfiguration("calibration_file"),
+            "mirror_mode": LaunchConfiguration("mirror_mode"),
             "use_sim_time": LaunchConfiguration("use_sim_time", default="false"),
         }],
     )

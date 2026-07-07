@@ -102,6 +102,7 @@ def generate_launch_description():
         ("right_servo_name", "right_servo_node"),
         ("vr_calibration_enabled", "true"),
         ("vr_calibration_file", ""),
+        ("mirror_mode", "true"),
     ):
         ld.add_action(DeclareLaunchArgument(name, default_value=default))
 
@@ -468,6 +469,7 @@ def generate_launch_description():
             "right_base_frame": LaunchConfiguration("right_base_frame"),
             "calibration_enabled": LaunchConfiguration("vr_calibration_enabled"),
             "calibration_file": LaunchConfiguration("vr_calibration_file"),
+            "mirror_mode": LaunchConfiguration("mirror_mode"),
         }.items(),
     )
     ld.add_action(vr_teleop_launch)

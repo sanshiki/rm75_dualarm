@@ -295,6 +295,9 @@ class PoseTrackingNode(Node):
 
     # ==================================================================
     def _target_cb(self, msg: PoseStamped):
+        # Reset soft-start on first-ever target or when recovering from timeout
+        if self._target is None or self._soft_start_scale < 1e-6:
+            self._soft_start_scale = 0.0
         self._target = msg
         self._last_target_time = self.get_clock().now()
 
