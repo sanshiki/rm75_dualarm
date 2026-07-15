@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Offline analysis for dual-arm teleop rosbag recordings."""
+"""Offline analysis for dual-arm teleop rosbag recordings.
+
+Auto-detects sim vs real-hardware topics from the bag contents.
+"""
 
 import argparse
 import os
@@ -17,14 +20,31 @@ from rosidl_runtime_py.utilities import get_message
 from scipy.spatial.transform import Rotation as R
 
 
-TOPICS = {
+# ---- Topic discovery ----
+# Fixed topics (same in sim and real)
+_FIXED = {
     "joint_states": "/joint_states",
-    "left_target": "/left/target_pose",
-    "right_target": "/right/target_pose",
-    "left_cmd": "/left_rm_group_controller/joint_trajectory",
-    "right_cmd": "/right_rm_group_controller/joint_trajectory",
     "tf": "/tf",
     "tf_static": "/tf_static",
+}
+
+# Prioritised candidates: first topic found in the bag wins
+_CMD_CANDIDATES = {
+    "left_cmd": [
+        "/left_rm_group_controller/joint_trajectory",   # sim (servo→controller)
+        "/left_servo_bridge/joint_trajectory_in",         # real (servo→bridge)
+        "/left/rm_driver/movej_canfd_cmd",                # real (bridge→driver)
+    ],
+    "right_cmd": [
+        "/right_rm_group_controller/joint_trajectory",
+        "/right_servo_bridge/joint_trajectory_in",
+        "/right/rm_driver/movej_canfd_cmd",
+    ],
+}
+
+_TARGET_CANDIDATES = {
+    "left_target": ["/left/target_pose"],
+    "right_target": ["/right/target_pose"],
 }
 
 EEF_FRAMES = {
@@ -33,7 +53,27 @@ EEF_FRAMES = {
 }
 
 
-def read_bag(path):
+def _resolve_topics(bag_topics: set) -> dict:
+    """Build a {logical_key: actual_topic} dict from what is in the bag."""
+    resolved = {}
+    for key, topic in _FIXED.items():
+        if topic in bag_topics:
+            resolved[key] = topic
+    for key, candidates in _CMD_CANDIDATES.items():
+        for t in candidates:
+            if t in bag_topics:
+                resolved[key] = t
+                break
+    for key, candidates in _TARGET_CANDIDATES.items():
+        for t in candidates:
+            if t in bag_topics:
+                resolved[key] = t
+                break
+    return resolved
+
+
+def read_bag(path, wanted_topics: set):
+    """Read only the topics we care about."""
     reader = rosbag2_py.SequentialReader()
     storage = rosbag2_py.StorageOptions(uri=path, storage_id="sqlite3")
     converter = rosbag2_py.ConverterOptions("", "")
@@ -42,7 +82,7 @@ def read_bag(path):
     messages = defaultdict(list)
     while reader.has_next():
         topic, data, stamp = reader.read_next()
-        if topic not in TOPICS.values():
+        if topic not in wanted_topics:
             continue
         msg_type = get_message(types[topic])
         msg = deserialize_message(data, msg_type)
@@ -59,6 +99,8 @@ def frequency(rows):
     return float(1.0 / np.mean(diffs)) if len(diffs) else 0.0
 
 
+# ---- Frame builders ----
+
 def joint_state_frame(rows):
     records = []
     for t, msg in rows:
@@ -68,6 +110,7 @@ def joint_state_frame(rows):
 
 
 def trajectory_frame(rows):
+    """Parse JointTrajectory messages."""
     records = []
     for t, msg in rows:
         if not msg.points:
@@ -75,6 +118,19 @@ def trajectory_frame(rows):
         pt = msg.points[0]
         for name, pos in zip(msg.joint_names, pt.positions):
             records.append({"time": t, "joint": name, "cmd_position": pos})
+    return pd.DataFrame(records)
+
+
+def jointpos_frame(rows, side: str):
+    """Parse Jointpos messages (no joint names — inferred from ordering)."""
+    records = []
+    for t, msg in rows:
+        for i, pos in enumerate(msg.joint, start=1):
+            records.append({
+                "time": t,
+                "joint": f"{side}_joint{i}",
+                "cmd_position": float(pos),
+            })
     return pd.DataFrame(records)
 
 
@@ -94,8 +150,12 @@ def target_frame(rows):
     return pd.DataFrame(records)
 
 
+# ---- TF / EEF ----
+
 def _quat_to_rpy(qx, qy, qz, qw):
-    return R.from_quat([qx, qy, qz, qw]).as_euler("xyz", degrees=False)
+    """RPY via matrix round-trip to match _matrix_record code path."""
+    r = R.from_quat([qx, qy, qz, qw])
+    return R.from_matrix(r.as_matrix()).as_euler("xyz", degrees=False)
 
 
 def _add_rpy(df):
@@ -122,8 +182,9 @@ def _transform_matrix(trans):
 
 
 def _matrix_record(t, mat):
-    quat = R.from_matrix(mat[:3, :3]).as_quat()
-    roll, pitch, yaw = R.from_matrix(mat[:3, :3]).as_euler("xyz", degrees=False)
+    rot = R.from_matrix(mat[:3, :3])
+    quat = rot.as_quat()
+    rpy = rot.as_euler("xyz", degrees=False)
     return {
         "time": t,
         "x": mat[0, 3],
@@ -133,9 +194,9 @@ def _matrix_record(t, mat):
         "qy": quat[1],
         "qz": quat[2],
         "qw": quat[3],
-        "roll": roll,
-        "pitch": pitch,
-        "yaw": yaw,
+        "roll": rpy[0],
+        "pitch": rpy[1],
+        "yaw": rpy[2],
     }
 
 
@@ -170,17 +231,20 @@ def eef_frame(tf_rows, tf_static_rows, side):
     return pd.DataFrame(records)
 
 
+# ---- Plotting ----
+
 def plot_joint_tracking(out_dir, side, js_df, cmd_df):
-    prefix = f"{side}_joint"
     joints = [f"{side}_joint{i}" for i in range(1, 8)]
+    has_js = "joint" in js_df.columns
+    has_cmd = "joint" in cmd_df.columns
     fig, axes = plt.subplots(7, 1, figsize=(12, 14), sharex=True)
     for ax, joint in zip(axes, joints):
-        js = js_df[js_df["joint"] == joint]
-        cmd = cmd_df[cmd_df["joint"] == joint]
+        js = js_df[js_df["joint"] == joint] if has_js else pd.DataFrame()
+        cmd = cmd_df[cmd_df["joint"] == joint] if has_cmd else pd.DataFrame()
         if not js.empty:
             ax.plot(js["time"] - js["time"].iloc[0], js["position"], label="joint_state")
         if not cmd.empty:
-            t0 = cmd["time"].iloc[0] if js.empty else js["time"].iloc[0]
+            t0 = js["time"].iloc[0] if not js.empty else cmd["time"].iloc[0]
             ax.plot(cmd["time"] - t0, cmd["cmd_position"], label="trajectory_cmd", alpha=0.8)
         ax.set_ylabel(joint)
         ax.grid(True)
@@ -195,6 +259,15 @@ def plot_joint_tracking(out_dir, side, js_df, cmd_df):
 
 def plot_pose_tracking(out_dir, side, target_df, eef_df):
     target_df = _add_rpy(target_df)
+    # Sort by time and unwrap angular columns to avoid -π↔π jumps
+    for df in (target_df, eef_df):
+        if df.empty or "time" not in df.columns:
+            continue
+        df.sort_values("time", inplace=True)
+        for col in ("roll", "pitch", "yaw"):
+            if col in df.columns:
+                df[col] = np.unwrap(df[col].to_numpy())
+
     fig, axes = plt.subplots(6, 1, figsize=(12, 14), sharex=True)
     axes_info = [
         ("x", "position x [m]"),
@@ -238,6 +311,8 @@ def plot_pose_tracking(out_dir, side, target_df, eef_df):
     return path
 
 
+# ---- Main ----
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("bag")
@@ -247,32 +322,79 @@ def main():
     out_dir = args.output or os.path.join("analysis", os.path.basename(os.path.abspath(args.bag)))
     os.makedirs(out_dir, exist_ok=True)
 
-    messages = read_bag(args.bag)
-    js_df = joint_state_frame(messages[TOPICS["joint_states"]])
-    left_cmd_df = trajectory_frame(messages[TOPICS["left_cmd"]])
-    right_cmd_df = trajectory_frame(messages[TOPICS["right_cmd"]])
-    left_target_df = target_frame(messages[TOPICS["left_target"]])
-    right_target_df = target_frame(messages[TOPICS["right_target"]])
-    left_eef_df = eef_frame(messages[TOPICS["tf"]], messages[TOPICS["tf_static"]], "left")
-    right_eef_df = eef_frame(messages[TOPICS["tf"]], messages[TOPICS["tf_static"]], "right")
+    # -- 1. Peek at bag to discover topics --
+    reader = rosbag2_py.SequentialReader()
+    storage = rosbag2_py.StorageOptions(uri=args.bag, storage_id="sqlite3")
+    converter = rosbag2_py.ConverterOptions("", "")
+    reader.open(storage, converter)
+    bag_topics = {t.name: t.type for t in reader.get_all_topics_and_types()}
 
+    resolved = _resolve_topics(set(bag_topics.keys()))
+    wanted = set(resolved.values())
+    print(f"Bag contains {len(bag_topics)} topics; matched {len(wanted)} for analysis:")
+    for key in sorted(resolved):
+        print(f"  {key:20s} → {resolved[key]}")
+
+    # -- 2. Read only the resolved topics --
+    messages = read_bag(args.bag, wanted)
+
+    # -- 3. Build dataframes --
+    js_df = joint_state_frame(messages.get(resolved.get("joint_states", ""), []))
+
+    # Command frames: pick parser by message type
+    def _parse_cmd(side):
+        key = f"{side}_cmd"
+        topic = resolved.get(key)
+        rows = messages.get(topic, []) if topic else []
+        if not rows:
+            return pd.DataFrame()
+        msg_type = bag_topics.get(topic, "")
+        if "Jointpos" in msg_type:
+            return jointpos_frame(rows, side)
+        else:
+            return trajectory_frame(rows)
+
+    left_cmd_df = _parse_cmd("left")
+    right_cmd_df = _parse_cmd("right")
+
+    left_target_df = target_frame(messages.get(resolved.get("left_target", ""), []))
+    right_target_df = target_frame(messages.get(resolved.get("right_target", ""), []))
+
+    left_eef_df = eef_frame(
+        messages.get(resolved.get("tf", ""), []),
+        messages.get(resolved.get("tf_static", ""), []),
+        "left",
+    )
+    right_eef_df = eef_frame(
+        messages.get(resolved.get("tf", ""), []),
+        messages.get(resolved.get("tf_static", ""), []),
+        "right",
+    )
+
+    # -- 4. Plot --
     outputs = []
     outputs.append(plot_joint_tracking(out_dir, "left", js_df, left_cmd_df))
     outputs.append(plot_joint_tracking(out_dir, "right", js_df, right_cmd_df))
     outputs.append(plot_pose_tracking(out_dir, "left", left_target_df, left_eef_df))
     outputs.append(plot_pose_tracking(out_dir, "right", right_target_df, right_eef_df))
 
+    # -- 5. Summary --
     summary = os.path.join(out_dir, "summary.md")
     with open(summary, "w", encoding="utf-8") as f:
         f.write("# Dual Teleop Bag Analysis\n\n")
-        f.write("## Frequencies\n\n")
-        for key, topic in TOPICS.items():
-            f.write(f"- `{topic}`: {frequency(messages[topic]):.2f} Hz\n")
+        f.write(f"**Bag:** `{args.bag}`\n\n")
+        f.write("## Resolved Topics\n\n")
+        for key in sorted(resolved):
+            f.write(f"- `{key}` → `{resolved[key]}`\n")
+        f.write("\n## Frequencies\n\n")
+        for key in sorted(resolved):
+            topic = resolved[key]
+            f.write(f"- `{topic}`: {frequency(messages.get(topic, [])):.2f} Hz\n")
         f.write("\n## Generated Plots\n\n")
         for path in outputs:
             f.write(f"- `{os.path.basename(path)}`\n")
         f.write("\n## Notes\n\n")
-        f.write("- Joint tracking compares `/joint_states` against first-point trajectory commands.\n")
+        f.write("- Joint tracking compares `/joint_states` against first-point trajectory/position commands.\n")
         f.write("- Pose tracking plots compare EEF TF against target pose per axis.\n")
         f.write("- Orientation is shown as RPY in radians.\n")
     print(f"Wrote analysis to {out_dir}")
