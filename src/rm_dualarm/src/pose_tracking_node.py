@@ -207,7 +207,7 @@ class PoseTrackingNode(Node):
         # ---- State ----
         self._target = None   # latest PoseStamped
         self._last_target_time = Time()
-        self._teleop_active = True   # default active (backward compat)
+        self._teleop_active = False
 
         # ---- Pub / Sub ----
         self._twist_pub = self.create_publisher(
@@ -308,8 +308,24 @@ class PoseTrackingNode(Node):
 
     def _active_cb(self, msg: Bool):
         self._teleop_active = msg.data
+        if not self._teleop_active:
+            self._reset_tracking_state(clear_target=True)
 
     # ==================================================================
+    def _reset_tracking_state(self, clear_target=False):
+        self._pid_x.reset()
+        self._pid_y.reset()
+        self._pid_z.reset()
+        self._pid_ang.reset()
+        self._pid_ang_x.reset()
+        self._pid_ang_y.reset()
+        self._pid_ang_z.reset()
+        self._soft_start_scale = 0.0
+        self._filt = [0.0] * 6
+        self._filt_inited = False
+        if clear_target:
+            self._target = None
+
     def _get_ee_pose(self):
         """Return current EE (x, y, z, roll, pitch, yaw, quat) from TF."""
         try:
@@ -336,31 +352,15 @@ class PoseTrackingNode(Node):
 
         # Check teleop active — stop immediately on deactivation
         if not self._teleop_active:
-            self._pid_x.reset()
-            self._pid_y.reset()
-            self._pid_z.reset()
-            self._pid_ang.reset()
-            self._pid_ang_x.reset()
-            self._pid_ang_y.reset()
-            self._pid_ang_z.reset()
-            self._soft_start_scale = 0.0
-            self._publish_twist(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, now)
+            self._reset_tracking_state(clear_target=True)
             return
 
         # Check timeout
         if self._target is None:
             return
         elapsed = (now - self._last_target_time).nanoseconds * 1e-9
-        if elapsed > 0.3:   # no recent target → zero twist (stay)
-            self._pid_x.reset()
-            self._pid_y.reset()
-            self._pid_z.reset()
-            self._pid_ang.reset()
-            self._pid_ang_x.reset()
-            self._pid_ang_y.reset()
-            self._pid_ang_z.reset()
-            self._soft_start_scale = 0.0
-            self._publish_twist(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, now)
+        if elapsed > 0.3:   # no recent target → stay quiet
+            self._reset_tracking_state(clear_target=True)
             # self.get_logger().warn(
                 # f"target_pose timeout ({elapsed:.2f}s); reset soft-start and PID integrators")
             return

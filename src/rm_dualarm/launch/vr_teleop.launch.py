@@ -91,6 +91,11 @@ def generate_launch_description():
             teleop_params, "right_active_topic", "/right/teleop_active"),
     ))
     ld.add_action(DeclareLaunchArgument(
+        "servo_bridge_stop_topic",
+        default_value=_launch_default(
+            teleop_params, "servo_bridge_stop_topic", "/servo_bridge/stop"),
+    ))
+    ld.add_action(DeclareLaunchArgument(
         "left_gripper_topic",
         default_value=_launch_default(teleop_params, "left_gripper_topic", "/left/gripper_cmd"),
     ))
@@ -171,6 +176,10 @@ def generate_launch_description():
         "mirror_mode",
         default_value=_launch_default(teleop_params, "mirror_mode", False),
     ))
+    ld.add_action(DeclareLaunchArgument(
+        "standby_pose_file",
+        default_value=_launch_default(teleop_params, "standby_pose_file", ""),
+    ))
     ld.add_action(DeclareLaunchArgument("use_sim_time", default_value="false"))
 
     # ================================================================
@@ -230,6 +239,7 @@ def generate_launch_description():
                 "active_topic": LaunchConfiguration("active_topic"),
                 "left_active_topic": LaunchConfiguration("left_active_topic"),
                 "right_active_topic": LaunchConfiguration("right_active_topic"),
+                "servo_bridge_stop_topic": LaunchConfiguration("servo_bridge_stop_topic"),
                 "left_gripper_topic": LaunchConfiguration("left_gripper_topic"),
                 "right_gripper_topic": LaunchConfiguration("right_gripper_topic"),
                 "gripper_driver_topic": LaunchConfiguration("gripper_driver_topic"),
@@ -250,6 +260,7 @@ def generate_launch_description():
                 "calibration_enabled": LaunchConfiguration("calibration_enabled"),
                 "calibration_file": LaunchConfiguration("calibration_file"),
                 "mirror_mode": LaunchConfiguration("mirror_mode"),
+                "standby_pose_file": LaunchConfiguration("standby_pose_file"),
                 "use_sim_time": LaunchConfiguration("use_sim_time"),
             },
         ],

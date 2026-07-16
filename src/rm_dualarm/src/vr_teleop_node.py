@@ -23,13 +23,21 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 import rclpy
+from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.time import Time
 from rclpy.duration import Duration
 from geometry_msgs.msg import PoseStamped
+from moveit_msgs.action import MoveGroup
+from moveit_msgs.msg import (
+    Constraints,
+    JointConstraint,
+    MotionPlanRequest,
+    PlanningOptions,
+)
 from rm_ros_interfaces.msg import Gripperset
 from sensor_msgs.msg import Joy
-from std_msgs.msg import Bool, Float32
+from std_msgs.msg import Bool, Empty, Float32
 from tf2_ros import Buffer, TransformListener, TransformException
 
 
@@ -40,6 +48,15 @@ ORI_MAPPING = np.array([
     [1, 0, 0],
     [0, 1, 0],
 ])
+
+_PLANNING_GROUP = "rm_group"
+_EXPECTED_JOINTS = [
+    "joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"
+]
+_DUAL_TARGETS = [
+    ("left_rm_group", "left_"),
+    ("right_rm_group", "right_"),
+]
 
 
 class ButtonState:
@@ -77,6 +94,7 @@ class VRTrackerNode(Node):
         self.declare_parameter("active_topic", "/teleop_active")
         self.declare_parameter("left_active_topic", "/left/teleop_active")
         self.declare_parameter("right_active_topic", "/right/teleop_active")
+        self.declare_parameter("servo_bridge_stop_topic", "/servo_bridge/stop")
         self.declare_parameter("left_gripper_topic", "/left/gripper_cmd")
         self.declare_parameter("right_gripper_topic", "/right/gripper_cmd")
         self.declare_parameter("left_gripper_driver_topic", "/left/rm_driver/set_gripper_position_cmd")
@@ -99,6 +117,7 @@ class VRTrackerNode(Node):
         self.declare_parameter("calibration_enabled", True)
         self.declare_parameter("calibration_file", "")
         self.declare_parameter("mirror_mode", False)
+        self.declare_parameter("standby_pose_file", "")
 
         self._control_mode = self.get_parameter("control_mode").value
         self._target_topic = self.get_parameter("target_topic").value
@@ -107,6 +126,7 @@ class VRTrackerNode(Node):
         self._active_topic = self.get_parameter("active_topic").value
         self._left_active_topic = self.get_parameter("left_active_topic").value
         self._right_active_topic = self.get_parameter("right_active_topic").value
+        self._servo_bridge_stop_topic = self.get_parameter("servo_bridge_stop_topic").value
         self._left_gripper_topic = self.get_parameter("left_gripper_topic").value
         self._right_gripper_topic = self.get_parameter("right_gripper_topic").value
         self._left_gripper_driver_topic = self.get_parameter("left_gripper_driver_topic").value
@@ -128,13 +148,20 @@ class VRTrackerNode(Node):
         self._calibration_enabled = self.get_parameter("calibration_enabled").value
         self._calibration_file = self.get_parameter("calibration_file").value
         self._mirror_mode = self.get_parameter("mirror_mode").value
+        self._standby_pose_file = self.get_parameter("standby_pose_file").value
         self._calibration = self._load_calibration()
 
         # ---- State ----
         self._activated = False
+        self._a_held = False
         self._activate_cnt = 0
         self._try_activate = False
         self._activate_timer = None
+        self._standby_hold_timer = None
+        self._standby_hold_consumed = False
+        self._standby_in_progress = False
+        self._standby_targets = []
+        self._standby_target_index = 0
         self._blocked = False
         self._mode = "normal"
         self._mirror_x_home = {}       # {"left": x, "right": x} — X pivot per arm
@@ -162,6 +189,9 @@ class VRTrackerNode(Node):
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
 
+        # ---- MoveIt action client for idle standby recovery ----
+        self._move_action = ActionClient(self, MoveGroup, "/move_action")
+
         # ---- Publisher ----
         self._pose_pub = self.create_publisher(PoseStamped, self._target_topic, 10)
         self._left_pose_pub = self.create_publisher(PoseStamped, self._left_target_topic, 10)
@@ -169,6 +199,8 @@ class VRTrackerNode(Node):
         self._active_pub = self.create_publisher(Bool, self._active_topic, 1)
         self._left_active_pub = self.create_publisher(Bool, self._left_active_topic, 1)
         self._right_active_pub = self.create_publisher(Bool, self._right_active_topic, 1)
+        self._servo_bridge_stop_pub = self.create_publisher(
+            Empty, self._servo_bridge_stop_topic, 1)
         self._left_gripper_pub = self.create_publisher(Float32, self._left_gripper_topic, 1)
         self._right_gripper_pub = self.create_publisher(Float32, self._right_gripper_topic, 1)
         self._left_gripper_driver_pub = self.create_publisher(
@@ -192,8 +224,54 @@ class VRTrackerNode(Node):
         self.get_logger().info(
             f"VR teleop ready | control={self._control_mode} | mode={self._mode}"
             f"{' | MIRROR' if self._mirror_mode else ''}"
-            f" | triple-press A to activate, B to switch mode, RB to block"
+            f" | triple-press A to activate, hold A 3s in IDLE for standby"
+            f", B to switch mode, RB to block"
         )
+
+    def _default_standby_pose_file(self):
+        try:
+            from ament_index_python.packages import get_package_share_directory
+            return os.path.join(
+                get_package_share_directory("rm_dualarm"),
+                "config",
+                "standby_pose.yaml",
+            )
+        except Exception:
+            return os.path.join(
+                os.path.dirname(os.path.dirname(__file__)),
+                "config",
+                "standby_pose.yaml",
+            )
+
+    def _load_standby_joints(self):
+        path = self._standby_pose_file or self._default_standby_pose_file()
+        if not os.path.exists(path):
+            raise RuntimeError(f"standby pose file not found: {path}")
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        joints = data.get("joints", data)
+        missing = [name for name in _EXPECTED_JOINTS if name not in joints]
+        if missing:
+            raise RuntimeError(
+                f"Standby pose file {path} missing joints: {', '.join(missing)}"
+            )
+        self.get_logger().info(f"Loaded standby pose: {path}")
+        return {name: float(joints[name]) for name in _EXPECTED_JOINTS}
+
+    def _make_standby_targets(self):
+        base_joints = self._load_standby_joints()
+        if self._control_mode == "dual":
+            return [
+                (
+                    group,
+                    {
+                        f"{prefix}{joint}": position
+                        for joint, position in base_joints.items()
+                    },
+                )
+                for group, prefix in _DUAL_TARGETS
+            ]
+        return [(_PLANNING_GROUP, dict(base_joints))]
 
     def _load_calibration(self):
         default = {
@@ -268,13 +346,27 @@ class VRTrackerNode(Node):
     # ==================================================================
 
     def _a_press(self):
+        self._a_held = True
+        self._standby_hold_consumed = False
         self._try_activate = True
         if self._activate_timer is None:
             self._activate_timer = self.create_timer(
                 3.0, self._activate_timeout
             )
+        if not self._activated and self._standby_hold_timer is None:
+            self._standby_hold_timer = self.create_timer(
+                3.0, self._standby_hold_timeout
+            )
 
     def _a_release(self):
+        self._a_held = False
+        if self._standby_hold_timer is not None:
+            self._standby_hold_timer.cancel()
+            self._standby_hold_timer = None
+        if self._standby_hold_consumed:
+            self._try_activate = False
+            self._standby_hold_consumed = False
+            return
         if self._try_activate:
             self._activate_cnt += 1
             self._try_activate = False
@@ -294,6 +386,26 @@ class VRTrackerNode(Node):
         self._try_activate = False
         self._activate_timer.cancel()
         self._activate_timer = None
+
+    def _standby_hold_timeout(self):
+        if self._standby_hold_timer is not None:
+            self._standby_hold_timer.cancel()
+            self._standby_hold_timer = None
+        if self._activated or not self._a_held:
+            return
+
+        self._standby_hold_consumed = True
+        self._activate_cnt = 0
+        self._try_activate = False
+        if self._activate_timer is not None:
+            self._activate_timer.cancel()
+            self._activate_timer = None
+        self._last_pose = None
+        self._last_poses.clear()
+        self._mirror_x_home.clear()
+        self._publish_active(False)
+        self._stop_servo_bridge()
+        self._send_standby_goals()
 
     def _b_press(self):
         self._try_switch = True
@@ -341,6 +453,93 @@ class VRTrackerNode(Node):
             self._right_active_pub.publish(msg)
         else:
             self._active_pub.publish(msg)
+
+    def _stop_servo_bridge(self):
+        self._servo_bridge_stop_pub.publish(Empty())
+        self.get_logger().info(
+            f"Requested Servo bridge stop on {self._servo_bridge_stop_topic}"
+        )
+
+    def _send_standby_goals(self):
+        if self._standby_in_progress:
+            self.get_logger().warn("Standby request ignored; MoveIt goal already running")
+            return
+        if not self._move_action.wait_for_server(timeout_sec=0.1):
+            self.get_logger().error(
+                "Cannot send standby goal: /move_action is not available"
+            )
+            return
+        try:
+            self._standby_targets = self._make_standby_targets()
+        except RuntimeError as exc:
+            self.get_logger().error(str(exc))
+            return
+
+        self._standby_in_progress = True
+        self._standby_target_index = 0
+        self.get_logger().info(
+            f"Sending standby MoveIt goal(s) ({len(self._standby_targets)} target(s))"
+        )
+        self._send_next_standby_goal()
+
+    def _send_next_standby_goal(self):
+        if self._standby_target_index >= len(self._standby_targets):
+            self._standby_in_progress = False
+            self.get_logger().info("Standby pose reached")
+            return
+
+        group_name, joint_positions = self._standby_targets[self._standby_target_index]
+        goal = MoveGroup.Goal()
+        goal.request = MotionPlanRequest()
+        goal.request.group_name = group_name
+        goal.request.num_planning_attempts = 5
+        goal.request.allowed_planning_time = 5.0
+        goal.request.max_velocity_scaling_factor = 0.5
+        goal.request.max_acceleration_scaling_factor = 0.5
+
+        constraints = Constraints()
+        for joint_name, position in joint_positions.items():
+            joint_constraint = JointConstraint()
+            joint_constraint.joint_name = joint_name
+            joint_constraint.position = position
+            joint_constraint.tolerance_above = 0.01
+            joint_constraint.tolerance_below = 0.01
+            joint_constraint.weight = 1.0
+            constraints.joint_constraints.append(joint_constraint)
+        goal.request.goal_constraints.append(constraints)
+
+        goal.planning_options = PlanningOptions()
+        goal.planning_options.plan_only = False
+        goal.planning_options.look_around = False
+        goal.planning_options.replan = True
+        goal.planning_options.replan_attempts = 3
+        goal.planning_options.replan_delay = 1.0
+
+        self.get_logger().info(f"[{group_name}] sending standby goal")
+        future = self._move_action.send_goal_async(goal)
+        future.add_done_callback(self._standby_goal_response_cb)
+
+    def _standby_goal_response_cb(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self._standby_in_progress = False
+            self.get_logger().error("Standby goal rejected by move_group")
+            return
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self._standby_result_cb)
+
+    def _standby_result_cb(self, future):
+        result = future.result().result
+        group_name, _ = self._standby_targets[self._standby_target_index]
+        if result.error_code.val == result.error_code.SUCCESS:
+            self.get_logger().info(f"[{group_name}] standby pose reached")
+            self._standby_target_index += 1
+            self._send_next_standby_goal()
+        else:
+            self._standby_in_progress = False
+            self.get_logger().error(
+                f"[{group_name}] standby FAILED: error_code={result.error_code.val}"
+            )
 
     def _publish_gripper_placeholders(self):
         """Map LT/RT triggers → gripper open (900) / close (100).

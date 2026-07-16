@@ -28,6 +28,7 @@ vr_teleop:
     active_topic: /teleop_active
     left_active_topic: /left/teleop_active
     right_active_topic: /right/teleop_active
+    servo_bridge_stop_topic: /servo_bridge/stop
     left_gripper_topic: /left/gripper_cmd
     right_gripper_topic: /right/gripper_cmd
     joy_topic: /quest/joystick
@@ -50,3 +51,4 @@ vr_teleop:
     calibration_enabled: true
     calibration_file: ""
     mirror_mode: false
+    standby_pose_file: ""

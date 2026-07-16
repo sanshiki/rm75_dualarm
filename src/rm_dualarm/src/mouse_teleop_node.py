@@ -155,7 +155,16 @@ class MouseTeleopNode(Node):
             if pressed:
                 self.get_logger().info("Servo ACTIVE - robot is following mouse")
             else:
+                self._publish_active(False)
                 self.get_logger().info("Servo IDLE - holding position (timeout)")
+
+    def _publish_active(self, active):
+        msg = Bool(data=active)
+        if self._control_mode == "dual":
+            self._left_active_pub.publish(msg)
+            self._right_active_pub.publish(msg)
+        else:
+            self._active_pub.publish(msg)
 
     # ==================================================================
     def _screen_to_robot(self):
@@ -253,11 +262,10 @@ class MouseTeleopNode(Node):
                 self._right_fixed_q)
             self._left_pose_pub.publish(left_pose)
             self._right_pose_pub.publish(right_pose)
-            self._left_active_pub.publish(Bool(data=True))
-            self._right_active_pub.publish(Bool(data=True))
+            self._publish_active(True)
         else:
             self._pose_pub.publish(self._make_pose(self._base_frame, rx, ry, rz))
-            self._active_pub.publish(Bool(data=True))
+            self._publish_active(True)
 
 
 # ======================================================================

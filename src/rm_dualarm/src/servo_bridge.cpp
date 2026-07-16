@@ -84,19 +84,21 @@ ServoBridge::ServoBridge(const rclcpp::NodeOptions & options)
 void ServoBridge::servoCallback(
   const trajectory_msgs::msg::JointTrajectory::SharedPtr msg)
 {
-  if (stopped_) {
-    return;   // Emergency-stop active — ignore incoming commands
-  }
-
   std::lock_guard<std::mutex> lock(mutex_);
   latest_trajectory_ = msg;
   last_command_time_ = now();
+  if (stopped_) {
+    RCLCPP_INFO(get_logger(), "ServoBridge resumed by new Servo command");
+  }
+  stopped_ = false;
 }
 
 // ------------------------------------------------------------------
 void ServoBridge::stopCallback(const std_msgs::msg::Empty::SharedPtr /*msg*/)
 {
-  RCLCPP_WARN(get_logger(), "ServoBridge STOP received — halting");
+  RCLCPP_WARN(get_logger(), "ServoBridge STOP received — suppressing driver output");
+  std::lock_guard<std::mutex> lock(mutex_);
+  latest_trajectory_.reset();
   stopped_ = true;
 }
 
@@ -105,6 +107,7 @@ void ServoBridge::timerCallback()
 {
   trajectory_msgs::msg::JointTrajectory::SharedPtr traj;
   bool stale = false;
+  bool stopped = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -114,10 +117,7 @@ void ServoBridge::timerCallback()
       stale = true;
     }
     traj = latest_trajectory_;   // may be nullptr if never received
-    // Un-pause if new command arrives after a stop
-    if (elapsed < command_timeout_) {
-      stopped_ = false;
-    }
+    stopped = stopped_;
   }
 
   // Build and publish Jointpos message
@@ -126,23 +126,14 @@ void ServoBridge::timerCallback()
   jp.dof = static_cast<uint8_t>(arm_dof_);
   jp.expand = 0.0f;
 
-  if (stopped_) {
-    // Publish halt message with zero velocity (empty joints = hold)
-    // rm_driver interprets empty joint array as "no motion"
-    jp.joint.resize(arm_dof_, 0.0f);
-    jointpos_pub_->publish(jp);
+  if (stopped) {
+    // Stay silent so planned MoveIt trajectories can own the driver topic.
     return;
   }
 
   if (stale && halt_on_timeout_) {
-    // No recent command — stop sending or send last known position
-    if (traj && !traj->points.empty()) {
-      auto & last_pt = traj->points.back();
-      jp.joint.assign(last_pt.positions.begin(), last_pt.positions.end());
-    } else {
-      jp.joint.resize(arm_dof_, 0.0f);
-    }
-    jointpos_pub_->publish(jp);
+    // No recent Servo command. Do not keep re-publishing the last Servo point,
+    // because MoveIt may be executing a planned trajectory on the same driver.
     return;
   }
 

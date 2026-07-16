@@ -97,6 +97,7 @@ def generate_launch_description():
         ("vr_calibration_enabled", "true"),
         ("vr_calibration_file", ""),
         ("mirror_mode", "true"),
+        ("standby_pose_file", ""),
         ("base_x", ""),
         ("base_z", ""),
         ("base_spacing_y", ""),
@@ -458,6 +459,7 @@ def generate_launch_description():
             "calibration_enabled": LaunchConfiguration("vr_calibration_enabled"),
             "calibration_file": LaunchConfiguration("vr_calibration_file"),
             "mirror_mode": LaunchConfiguration("mirror_mode"),
+            "standby_pose_file": LaunchConfiguration("standby_pose_file"),
         }.items(),
     )
     ld.add_action(vr_teleop_launch)
