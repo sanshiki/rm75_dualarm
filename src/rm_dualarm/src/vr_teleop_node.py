@@ -81,6 +81,7 @@ class VRTrackerNode(Node):
         self.declare_parameter("right_gripper_topic", "/right/gripper_cmd")
         self.declare_parameter("left_gripper_driver_topic", "/left/rm_driver/set_gripper_position_cmd")
         self.declare_parameter("right_gripper_driver_topic", "/right/rm_driver/set_gripper_position_cmd")
+        self.declare_parameter("gripper_driver_topic", "/rm_driver/set_gripper_position_cmd")
         self.declare_parameter("joy_topic", "/quest/joystick")
         self.declare_parameter("vr_base_frame", "vr_base")
         self.declare_parameter("vr_origin_frame", "vr_origin")
@@ -110,6 +111,7 @@ class VRTrackerNode(Node):
         self._right_gripper_topic = self.get_parameter("right_gripper_topic").value
         self._left_gripper_driver_topic = self.get_parameter("left_gripper_driver_topic").value
         self._right_gripper_driver_topic = self.get_parameter("right_gripper_driver_topic").value
+        self._gripper_driver_topic = self.get_parameter("gripper_driver_topic").value
         self._vr_base = self.get_parameter("vr_base_frame").value
         self._vr_origin = self.get_parameter("vr_origin_frame").value
         self._hand_frame = self.get_parameter("vr_hand_frame").value
@@ -173,7 +175,10 @@ class VRTrackerNode(Node):
             Gripperset, self._left_gripper_driver_topic, 1)
         self._right_gripper_driver_pub = self.create_publisher(
             Gripperset, self._right_gripper_driver_topic, 1)
-        self._last_left_gripper_closed = None   # debounce: only publish on change
+        self._gripper_driver_pub = self.create_publisher(
+            Gripperset, self._gripper_driver_topic, 1)
+        self._last_gripper_closed = None         # debounce for single mode
+        self._last_left_gripper_closed = None    # debounce for dual mode
         self._last_right_gripper_closed = None
 
         # ---- Subscriber (VR joystick/buttons) ----
@@ -353,29 +358,39 @@ class VRTrackerNode(Node):
         self._left_gripper_pub.publish(Float32(data=left_val))
         self._right_gripper_pub.publish(Float32(data=right_val))
 
-        # Gripperset open/close with debounce
-        left_close = left_val > 0.5
-        right_close = right_val > 0.5
-
-        # Mirror mode (hand swap): left trigger → right gripper, right trigger → left gripper
-        if self._mirror_mode:
-            left_pub, right_pub = self._right_gripper_driver_pub, self._left_gripper_driver_pub
+        if self._control_mode == "single":
+            # Single arm: RT trigger → gripper on /rm_driver/set_gripper_position_cmd
+            close = right_val > 0.5
+            if close != self._last_gripper_closed:
+                self._last_gripper_closed = close
+                pos = 100 if close else 900
+                self._gripper_driver_pub.publish(
+                    Gripperset(position=pos, block=False, timeout=0))
+                self.get_logger().info(
+                    f"Gripper → {'CLOSE' if close else 'OPEN'} (pos={pos})")
         else:
-            left_pub, right_pub = self._left_gripper_driver_pub, self._right_gripper_driver_pub
+            # Dual arm: LT → left, RT → right (swapped in mirror mode)
+            left_close = left_val > 0.5
+            right_close = right_val > 0.5
 
-        if left_close != self._last_left_gripper_closed:
-            self._last_left_gripper_closed = left_close
-            pos = 100 if left_close else 900
-            left_pub.publish(Gripperset(position=pos, block=False, timeout=0))
-            self.get_logger().info(
-                f"Left trigger → {'CLOSE' if left_close else 'OPEN'} (pos={pos})")
+            if self._mirror_mode:
+                left_pub, right_pub = self._right_gripper_driver_pub, self._left_gripper_driver_pub
+            else:
+                left_pub, right_pub = self._left_gripper_driver_pub, self._right_gripper_driver_pub
 
-        if right_close != self._last_right_gripper_closed:
-            self._last_right_gripper_closed = right_close
-            pos = 100 if right_close else 900
-            right_pub.publish(Gripperset(position=pos, block=False, timeout=0))
-            self.get_logger().info(
-                f"Right trigger → {'CLOSE' if right_close else 'OPEN'} (pos={pos})")
+            if left_close != self._last_left_gripper_closed:
+                self._last_left_gripper_closed = left_close
+                pos = 100 if left_close else 900
+                left_pub.publish(Gripperset(position=pos, block=False, timeout=0))
+                self.get_logger().info(
+                    f"Left trigger → {'CLOSE' if left_close else 'OPEN'} (pos={pos})")
+
+            if right_close != self._last_right_gripper_closed:
+                self._last_right_gripper_closed = right_close
+                pos = 100 if right_close else 900
+                right_pub.publish(Gripperset(position=pos, block=False, timeout=0))
+                self.get_logger().info(
+                    f"Right trigger → {'CLOSE' if right_close else 'OPEN'} (pos={pos})")
 
     def _apply_calibration(self, side, pos, quat):
         if not self._calibration.get("enabled", False):
@@ -508,9 +523,16 @@ class VRTrackerNode(Node):
 
     def _normal_control(self):
         """Absolute VR hand pose → robot target."""
-        pose = self._pose_from_hand(self._hand_frame, self._base_frame, side="right")
+        if self._calibration.get("enabled") and self._calibration.get("schema_version") == 2:
+            pose = self._pose_from_calibrated_hand(self._hand_frame, self._base_frame, "right")
+        else:
+            pose = self._pose_from_hand(self._hand_frame, self._base_frame, side="right")
         if pose is None:
             return
+
+        if self._mirror_mode:
+            self._apply_mirror_x(pose, "right")
+
         self._pose_pub.publish(pose)
 
     def _dual_normal_control(self):

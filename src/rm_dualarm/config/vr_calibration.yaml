@@ -1,12 +1,5 @@
-# Template for VR hand pose to dual-arm target pose calibration.
-# Generate a real file with:
-#   ros2 launch rm_dualarm vr_calibration.launch.py output_file:=/tmp/vr_calibration.yaml
 schema_version: 2
 enabled: true
-# Kept for metadata/backward compatibility. Axis direction is controlled by
-# per-side position_scale; use right.position_scale: [1.0, -1.0, 1.0] only if
-# a specific VR setup needs right-hand Y inversion.
-
 description: Operator upright; upper arms down against body; forearms at 90 deg; controllers
   parallel to ground. Robot arms are in standby pose.
 sample_count: 99
@@ -21,8 +14,8 @@ frames:
   left_ee: left_Link7
   right_ee: right_Link7
 operator_center:
-  height_from_ground: 0.7951068842049801
-mirror_convergence: true
+  height_from_ground: 0.7768542718405675
+mirror_convergence: false
 left:
   position_scale:
   - 1.0
@@ -31,24 +24,24 @@ left:
   rotation_scale: 1.0
   vr_hand_standby:
     position:
-    - 0.28625898044974946
-    - 0.15147618913038594
-    - 1.1153976407029276
+    - 0.24582486724824645
+    - 0.1527368958737196
+    - 1.0441672011679617
     orientation_quat:
-    - 0.47276571674611323
-    - 0.5461503246348127
-    - 0.5032741359503856
-    - 0.4742652676026531
+    - 0.4440308477227154
+    - 0.5439460408577564
+    - 0.5231805137986172
+    - 0.48295078516059287
   robot_ee_standby:
     position:
-    - 0.3812198651943801
-    - 0.0028789978246947933
-    - 0.3858660265520594
+    - 0.3263325081171879
+    - -3.350446203272464e-07
+    - 0.36673022609304406
     orientation_quat:
-    - 0.0031961595997522393
-    - 0.9244555858952135
-    - 0.007460560677086088
-    - 0.3812033503333012
+    - 7.311789343579256e-06
+    - 0.9677257720040542
+    - 1.0937384142641197e-06
+    - 0.2520056153035053
 right:
   position_scale:
   - 1.0
@@ -57,21 +50,21 @@ right:
   rotation_scale: 1.0
   vr_hand_standby:
     position:
-    - 0.2794901036828156
-    - -0.1697615564156419
-    - 1.1324142706870044
+    - 0.24909862202416294
+    - -0.1620449362354574
+    - 1.0474770414036703
     orientation_quat:
-    - 0.5552578094891654
-    - 0.4808198822889175
-    - 0.4566895470395245
-    - 0.5019319310641621
+    - 0.5373349282161517
+    - 0.4959140528132816
+    - 0.4638275217712324
+    - 0.5002044154031484
   robot_ee_standby:
     position:
-    - 0.3830681495360509
-    - -0.0004063526413988513
-    - 0.3845484030607303
+    - 0.28786909965134805
+    - 1.78137542975976e-06
+    - 0.40737035599911403
     orientation_quat:
-    - 0.0008845024797445817
-    - -0.9244794257085669
-    - -0.0014321103660437482
-    - -0.3812282231902847
+    - 2.6881797920560197e-06
+    - -0.9568175467731687
+    - -6.445192360512148e-06
+    - -0.2906891503620455

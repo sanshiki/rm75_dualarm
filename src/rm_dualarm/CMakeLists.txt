@@ -47,9 +47,11 @@ install(PROGRAMS
   src/pose_tracking_node.py
   src/vr_teleop_node.py
   src/vr_base_broadcaster.py
+  src/camera_marker_calibration_node.py
   scripts/pose_init.py
   scripts/vr_calibration_capture.py
   scripts/analyze_dual_teleop_bag.py
+  scripts/analyze_single_teleop_bag.py
   scripts/dual_joint_state_merger.py
   scripts/relay_receiver.py
   scripts/trajectory_relay.py

@@ -318,6 +318,7 @@ def generate_launch_description():
                 "twist_topic": LaunchConfiguration("twist_topic"),
                 "base_frame": LaunchConfiguration("base_frame"),
                 "ee_frame": LaunchConfiguration("ee_frame"),
+                "active_topic": "/teleop_active",
                 "use_sim_time": False,
             },
         ],
@@ -327,7 +328,8 @@ def generate_launch_description():
     )
     ld.add_action(pose_tracking_node)
 
-    def dual_pose_tracking_params(target_topic, twist_topic, safe_zone_topic, base_frame, ee_frame):
+    def dual_pose_tracking_params(target_topic, twist_topic, safe_zone_topic,
+                                   base_frame, ee_frame, active_topic):
         return [
             base_pose_tracking_params,
             {
@@ -336,6 +338,7 @@ def generate_launch_description():
                 "safe_zone_topic": safe_zone_topic,
                 "base_frame": base_frame,
                 "ee_frame": ee_frame,
+                "active_topic": active_topic,
                 "use_sim_time": False,
             },
         ]
@@ -351,6 +354,7 @@ def generate_launch_description():
             "/left/pose_tracking/safe_zone",
             LaunchConfiguration("left_base_frame"),
             LaunchConfiguration("left_ee_frame"),
+            "/left/teleop_active",
         ),
         condition=IfCondition(PythonExpression([
             "'", use_pose_tracking, "' == 'false' and '", control_mode, "' == 'dual'"
@@ -369,6 +373,7 @@ def generate_launch_description():
             "/right/pose_tracking/safe_zone",
             LaunchConfiguration("right_base_frame"),
             LaunchConfiguration("right_ee_frame"),
+            "/right/teleop_active",
         ),
         condition=IfCondition(PythonExpression([
             "'", use_pose_tracking, "' == 'false' and '", control_mode, "' == 'dual'"

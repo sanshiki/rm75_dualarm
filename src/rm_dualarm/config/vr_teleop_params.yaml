@@ -21,7 +21,7 @@ vr_base_broadcaster:
 # ---- VR teleop node (hand TF → /target_pose) ----
 vr_teleop:
   ros__parameters:
-    control_mode: dual
+    control_mode: single
     target_topic: /target_pose
     left_target_topic: /left/target_pose
     right_target_topic: /right/target_pose

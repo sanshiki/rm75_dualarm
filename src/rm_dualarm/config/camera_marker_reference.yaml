@@ -1,0 +1,21 @@
+schema_version: 1
+description: Camera pose relative to a single planar AprilTag/ArUco marker.
+mode: capture
+sample_count: 50
+frames:
+  marker_frame: calibration_marker
+  camera_frame: ''
+marker:
+  dictionary: DICT_APRILTAG_36h11
+  id: 0
+  size_m: 0.095
+marker_to_camera:
+  position:
+  - -0.17597816791841217
+  - 0.05683587529403604
+  - 1.0878023014584903
+  orientation_quat:
+  - 0.9412255975526118
+  - 0.008453521092369631
+  - 0.007748923616459629
+  - 0.3375838661364843

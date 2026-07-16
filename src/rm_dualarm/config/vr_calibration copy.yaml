@@ -1,0 +1,77 @@
+# Template for VR hand pose to dual-arm target pose calibration.
+# Generate a real file with:
+#   ros2 launch rm_dualarm vr_calibration.launch.py output_file:=/tmp/vr_calibration.yaml
+schema_version: 2
+enabled: true
+# Kept for metadata/backward compatibility. Axis direction is controlled by
+# per-side position_scale; use right.position_scale: [1.0, -1.0, 1.0] only if
+# a specific VR setup needs right-hand Y inversion.
+
+description: Operator upright; upper arms down against body; forearms at 90 deg; controllers
+  parallel to ground. Robot arms are in standby pose.
+sample_count: 99
+frames:
+  vr_origin: vr_origin
+  vr_base: vr_base
+  headset: headset
+  left_hand: hand_left
+  right_hand: hand_right
+  left_base: left_base_link
+  right_base: right_base_link
+  left_ee: left_Link7
+  right_ee: right_Link7
+operator_center:
+  height_from_ground: 0.7951068842049801
+mirror_convergence: true
+left:
+  position_scale:
+  - 1.0
+  - 1.0
+  - 1.0
+  rotation_scale: 1.0
+  vr_hand_standby:
+    position:
+    - 0.28625898044974946
+    - 0.15147618913038594
+    - 1.1153976407029276
+    orientation_quat:
+    - 0.47276571674611323
+    - 0.5461503246348127
+    - 0.5032741359503856
+    - 0.4742652676026531
+  robot_ee_standby:
+    position:
+    - 0.3812198651943801
+    - 0.0028789978246947933
+    - 0.3858660265520594
+    orientation_quat:
+    - 0.0031961595997522393
+    - 0.9244555858952135
+    - 0.007460560677086088
+    - 0.3812033503333012
+right:
+  position_scale:
+  - 1.0
+  - 1.0
+  - 1.0
+  rotation_scale: 1.0
+  vr_hand_standby:
+    position:
+    - 0.2794901036828156
+    - -0.1697615564156419
+    - 1.1324142706870044
+    orientation_quat:
+    - 0.5552578094891654
+    - 0.4808198822889175
+    - 0.4566895470395245
+    - 0.5019319310641621
+  robot_ee_standby:
+    position:
+    - 0.3830681495360509
+    - -0.0004063526413988513
+    - 0.3845484030607303
+    orientation_quat:
+    - 0.0008845024797445817
+    - -0.9244794257085669
+    - -0.0014321103660437482
+    - -0.3812282231902847

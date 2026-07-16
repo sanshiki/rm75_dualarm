@@ -16,8 +16,8 @@ from rclpy.node import Node
 from rclpy.time import Time
 from rclpy.duration import Duration
 from geometry_msgs.msg import PoseStamped, TwistStamped, Vector3, Point
+from std_msgs.msg import Bool, ColorRGBA
 from visualization_msgs.msg import Marker
-from std_msgs.msg import ColorRGBA
 from tf2_ros import Buffer, TransformListener, TransformException
 
 
@@ -117,6 +117,7 @@ class PoseTrackingNode(Node):
         self.declare_parameter("publish_rate", 50.0)
         self.declare_parameter("target_topic", "/target_pose")
         self.declare_parameter("twist_topic", "/servo_node/delta_twist_cmds")
+        self.declare_parameter("active_topic", "/teleop_active")
         self.declare_parameter("safe_zone_topic", "/pose_tracking/safe_zone")
         self.declare_parameter("max_linear", 0.2)
         self.declare_parameter("max_angular", 0.5)
@@ -206,6 +207,7 @@ class PoseTrackingNode(Node):
         # ---- State ----
         self._target = None   # latest PoseStamped
         self._last_target_time = Time()
+        self._teleop_active = True   # default active (backward compat)
 
         # ---- Pub / Sub ----
         self._twist_pub = self.create_publisher(
@@ -215,6 +217,9 @@ class PoseTrackingNode(Node):
         self.create_subscription(
             PoseStamped, self.get_parameter("target_topic").value,
             self._target_cb, 10)
+        self.create_subscription(
+            Bool, self.get_parameter("active_topic").value,
+            self._active_cb, 1)
 
         # ---- Control loop ----
         rate = max(self.get_parameter("publish_rate").value, 1.0)
@@ -301,6 +306,9 @@ class PoseTrackingNode(Node):
         self._target = msg
         self._last_target_time = self.get_clock().now()
 
+    def _active_cb(self, msg: Bool):
+        self._teleop_active = msg.data
+
     # ==================================================================
     def _get_ee_pose(self):
         """Return current EE (x, y, z, roll, pitch, yaw, quat) from TF."""
@@ -325,6 +333,19 @@ class PoseTrackingNode(Node):
         self._last_tick = now
         if dt < 0.001 or dt > 0.5:
             dt = 0.02   # fallback
+
+        # Check teleop active — stop immediately on deactivation
+        if not self._teleop_active:
+            self._pid_x.reset()
+            self._pid_y.reset()
+            self._pid_z.reset()
+            self._pid_ang.reset()
+            self._pid_ang_x.reset()
+            self._pid_ang_y.reset()
+            self._pid_ang_z.reset()
+            self._soft_start_scale = 0.0
+            self._publish_twist(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, now)
+            return
 
         # Check timeout
         if self._target is None:

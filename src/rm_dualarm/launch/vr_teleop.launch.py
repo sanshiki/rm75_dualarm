@@ -99,6 +99,11 @@ def generate_launch_description():
         default_value=_launch_default(teleop_params, "right_gripper_topic", "/right/gripper_cmd"),
     ))
     ld.add_action(DeclareLaunchArgument(
+        "gripper_driver_topic",
+        default_value=_launch_default(teleop_params, "gripper_driver_topic",
+                                      "/rm_driver/set_gripper_position_cmd"),
+    ))
+    ld.add_action(DeclareLaunchArgument(
         "joy_topic",
         default_value=_launch_default(teleop_params, "joy_topic", "/quest/joystick"),
     ))
@@ -227,6 +232,7 @@ def generate_launch_description():
                 "right_active_topic": LaunchConfiguration("right_active_topic"),
                 "left_gripper_topic": LaunchConfiguration("left_gripper_topic"),
                 "right_gripper_topic": LaunchConfiguration("right_gripper_topic"),
+                "gripper_driver_topic": LaunchConfiguration("gripper_driver_topic"),
                 "joy_topic": LaunchConfiguration("joy_topic"),
                 "vr_base_frame": LaunchConfiguration("vr_base_frame"),
                 "vr_origin_frame": LaunchConfiguration("vr_origin_frame"),
