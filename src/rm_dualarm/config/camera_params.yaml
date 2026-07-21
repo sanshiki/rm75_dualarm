@@ -1,0 +1,20 @@
+/**:
+  ros__parameters:
+    # Static v4l2_camera parameters. Launch arguments override these defaults.
+    video_device: "/dev/v4l/by-id/usb-SN0002_2K_USB_Camera_46435000_P020300_SN0002-video-index0"
+    camera_frame_id: "camera_optical_frame"
+    camera_info_url: ""
+    pixel_format: "YUYV"
+    output_encoding: "rgb8"
+    image_size: [640, 480]
+
+    # Device controls reported by the current SN0002 2K USB Camera.
+    # These can also be changed at runtime with ros2 param set /camera/camera <name> <value>.
+    brightness: 128              # integer, 1..255
+    contrast: 128                # integer, 1..255
+    hue: 128                     # integer, 0..255
+    saturation: 128              # integer, 1..255
+    white_balance_automatic: false
+
+    # This camera did not report exposure or focus controls through v4l2_camera:
+    # no auto_exposure, exposure_time_absolute, focus_auto, or focus_absolute parameters.

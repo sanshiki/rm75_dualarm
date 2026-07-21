@@ -5,3 +5,5 @@
 /log/
 /bags/
 /analysis/
+/convert_result/
+__pycache__/
