@@ -1,0 +1,53 @@
+# Default launch settings for wrist-mounted RealSense D435i cameras.
+# Replace serial numbers and mount transforms with measured hardware values.
+
+control_mode: "single"
+single_wrist_side: "right"
+
+serial_numbers:
+  single: "''"
+  left: "''"
+  right: "''"
+
+mounts:
+  left:
+    parent_frame: "left_Link7"
+    camera_link: "left_wrist_camera_link"
+    xyz: [0.0, 0.0, 0.0]
+    rpy: [0.0, 0.0, 0.0]
+  right:
+    parent_frame: "right_Link7"
+    camera_link: "right_wrist_camera_link"
+    xyz: [0.0, 0.0, 0.0]
+    rpy: [0.0, 0.0, 0.0]
+  single:
+    parent_frame: "Link7"
+    camera_link: "wrist_camera_link"
+
+streams:
+  enable_color: true
+  enable_depth: false
+  enable_gyro: false
+  enable_accel: false
+  align_depth: false
+  pointcloud: false
+
+realsense:
+  # D435i RGB uses rolling shutter. Lower resolution + higher FPS shortens
+  # frame readout time and usually reduces vibration-induced distortion.
+  rgb_camera.color_profile: "640x480x30"
+  rgb_camera.color_format: "RGB8"
+  rgb_camera.enable_auto_exposure: false
+  rgb_camera.exposure: 100
+  rgb_camera.enable_auto_white_balance: false
+
+  # Depth stays disabled for RGB-focused wrist-camera use.
+  depth_module.depth_profile: "640x480x15"
+  depth_module.enable_auto_exposure: false
+
+  # Keep IMU disabled by default. Enabling it may require host udev/sysfs
+  # permissions for HID/IIO scan_elements.
+  gyro_fps: 200
+  accel_fps: 100
+  unite_imu_method: 2
+  enable_sync: false
