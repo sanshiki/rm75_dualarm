@@ -63,7 +63,7 @@ def generate_launch_description():
     ld.add_action(DeclareLaunchArgument("camera_info_url", default_value=""))
     ld.add_action(DeclareLaunchArgument("image_width", default_value="640"))
     ld.add_action(DeclareLaunchArgument("image_height", default_value="480"))
-    ld.add_action(DeclareLaunchArgument("pixel_format", default_value="YUYV"))
+    ld.add_action(DeclareLaunchArgument("pixel_format", default_value="RGB8"))
     ld.add_action(DeclareLaunchArgument("output_encoding", default_value="rgb8"))
     ld.add_action(DeclareLaunchArgument("use_sim_time", default_value="false"))
 

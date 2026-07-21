@@ -39,15 +39,13 @@ realsense:
   rgb_camera.color_format: "RGB8"
   rgb_camera.enable_auto_exposure: false
   rgb_camera.exposure: 100
-  rgb_camera.enable_auto_white_balance: false
 
   # Depth stays disabled for RGB-focused wrist-camera use.
-  depth_module.depth_profile: "640x480x15"
-  depth_module.enable_auto_exposure: false
+  depth_module.depth_profile: "640x480x30"
+  depth_module.enable_auto_exposure: true
 
-  # Keep IMU disabled by default. Enabling it may require host udev/sysfs
-  # permissions for HID/IIO scan_elements.
-  gyro_fps: 200
-  accel_fps: 100
-  unite_imu_method: 2
+  # IMU stays disabled by default to avoid HID/IIO permission issues.
+  gyro_fps: 0
+  accel_fps: 0
+  unite_imu_method: 0
   enable_sync: false

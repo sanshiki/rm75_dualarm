@@ -4,7 +4,7 @@
     video_device: "/dev/v4l/by-id/usb-SN0002_2K_USB_Camera_46435000_P020300_SN0002-video-index0"
     camera_frame_id: "camera_optical_frame"
     camera_info_url: ""
-    pixel_format: "YUYV"
+    pixel_format: "RGB8"
     output_encoding: "rgb8"
     image_size: [640, 480]
 
