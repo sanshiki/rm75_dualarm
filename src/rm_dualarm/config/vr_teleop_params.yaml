@@ -52,3 +52,6 @@ vr_teleop:
     calibration_file: ""
     mirror_mode: false
     standby_pose_file: ""
+    record_output_prefix: bags/vr_teleop
+    target_filter_enabled: true
+    target_filter_alpha: 0.6

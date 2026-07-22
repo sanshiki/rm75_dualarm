@@ -4,19 +4,21 @@
 Subscribes to /quest/joystick (Joy) and TF from the VR headset to map
 the user's hand pose directly to the robot end-effector target.
 
-Two control modes:
-  normal       — absolute VR hand pose → robot target
-  incremental  — VR hand delta → robot target (accumulated from EE pose)
+Control mode:
+  normal  — absolute VR hand pose → robot target
 
 Activation:  triple-press A
 Block:       hold RB
-Mode toggle: press B
+Recording:   press B to start/stop rosbag recording
 
 Output: PoseStamped on /target_pose (consumed by servo_pose_tracking_demo).
 """
 
 from queue import Queue
 import os
+import signal
+import subprocess
+import time
 import yaml
 
 import numpy as np
@@ -56,6 +58,38 @@ _EXPECTED_JOINTS = [
 _DUAL_TARGETS = [
     ("left_rm_group", "left_"),
     ("right_rm_group", "right_"),
+]
+_SINGLE_RECORD_TOPICS = [
+    "/joint_states",
+    "/target_pose",
+    "/tf",
+    "/tf_static",
+    "/teleop_active",
+    "/servo_node/delta_twist_cmds",
+    "/servo_node/status",
+    "/rm_group_controller/joint_trajectory",
+    "/servo_bridge/joint_trajectory_in",
+    "/rm_driver/movej_canfd_cmd",
+    "/rm_driver/set_gripper_position_cmd",
+    "/camera/image_raw",
+    "/wrist_camera/color/image_raw",
+]
+_DUAL_RECORD_TOPICS = [
+    "/joint_states",
+    "/left/target_pose",
+    "/right/target_pose",
+    "/tf",
+    "/tf_static",
+    "/left_servo_node/delta_twist_cmds",
+    "/right_servo_node/delta_twist_cmds",
+    "/left_rm_group_controller/joint_trajectory",
+    "/right_rm_group_controller/joint_trajectory",
+    "/left_servo_bridge/joint_trajectory_in",
+    "/right_servo_bridge/joint_trajectory_in",
+    "/left/rm_driver/movej_canfd_cmd",
+    "/right/rm_driver/movej_canfd_cmd",
+    "/left/wrist_camera/color/image_raw",
+    "/right/wrist_camera/color/image_raw",
 ]
 
 
@@ -118,6 +152,9 @@ class VRTrackerNode(Node):
         self.declare_parameter("calibration_file", "")
         self.declare_parameter("mirror_mode", False)
         self.declare_parameter("standby_pose_file", "")
+        self.declare_parameter("record_output_prefix", "bags/vr_teleop")
+        self.declare_parameter("target_filter_enabled", True)
+        self.declare_parameter("target_filter_alpha", 0.6)
 
         self._control_mode = self.get_parameter("control_mode").value
         self._target_topic = self.get_parameter("target_topic").value
@@ -149,6 +186,10 @@ class VRTrackerNode(Node):
         self._calibration_file = self.get_parameter("calibration_file").value
         self._mirror_mode = self.get_parameter("mirror_mode").value
         self._standby_pose_file = self.get_parameter("standby_pose_file").value
+        self._record_output_prefix = self.get_parameter("record_output_prefix").value
+        self._target_filter_enabled = self.get_parameter("target_filter_enabled").value
+        self._target_filter_alpha = self.get_parameter("target_filter_alpha").value
+        self._target_filter_alpha = max(0.0, min(1.0, self._target_filter_alpha))
         self._calibration = self._load_calibration()
 
         # ---- State ----
@@ -171,6 +212,10 @@ class VRTrackerNode(Node):
         self._p_err_buffer = Queue(maxsize=10)
         self._q_err_buffer = Queue(maxsize=10)
         self._axes = []
+        self._record_proc = None
+        self._record_output = None
+        self._record_button_armed = False
+        self._target_filters = {}
         # ---- Buttons ----
         self._buttons = {
             "X":  ButtonState("X"),
@@ -224,8 +269,10 @@ class VRTrackerNode(Node):
         self.get_logger().info(
             f"VR teleop ready | control={self._control_mode} | mode={self._mode}"
             f"{' | MIRROR' if self._mirror_mode else ''}"
+            f" | target_filter={'on' if self._target_filter_enabled else 'off'}"
+            f" (alpha={self._target_filter_alpha:.2f})"
             f" | triple-press A to activate, hold A 3s in IDLE for standby"
-            f", B to switch mode, RB to block"
+            f", B to start/stop recording, RB to block"
         )
 
     def _default_standby_pose_file(self):
@@ -377,6 +424,7 @@ class VRTrackerNode(Node):
                 self._activate_timer = None
                 if not self._activated:
                     self._mirror_x_home.clear()
+                    self._reset_target_filters()
                 state = "ACTIVE" if self._activated else "IDLE"
                 self._publish_active(self._activated)
                 self.get_logger().info(f"VR teleop {state}")
@@ -403,21 +451,22 @@ class VRTrackerNode(Node):
         self._last_pose = None
         self._last_poses.clear()
         self._mirror_x_home.clear()
+        self._reset_target_filters()
         self._publish_active(False)
         self._stop_servo_bridge()
         self._send_standby_goals()
 
     def _b_press(self):
-        self._try_switch = True
+        self._record_button_armed = True
 
     def _b_release(self):
-        if getattr(self, "_try_switch", False):
-            self._mode = "incremental" if self._mode == "normal" else "normal"
-            self.get_logger().info(f"Mode → {self._mode}")
-            self._try_switch = False
+        if self._record_button_armed:
+            self._toggle_recording()
+            self._record_button_armed = False
 
     def _rb_press(self):
         self._blocked = True
+        self._reset_target_filters()
 
     def _rb_release(self):
         self._blocked = False
@@ -430,22 +479,104 @@ class VRTrackerNode(Node):
         if not self._activated or self._blocked:
             self._last_pose = None
             self._last_poses.clear()
+            self._reset_target_filters()
             return
 
         try:
             if self._control_mode == "dual":
-                if self._mode == "normal":
-                    self._dual_normal_control()
-                elif self._mode == "incremental":
-                    self._dual_incremental_control()
-            elif self._mode == "normal":
+                self._dual_normal_control()
+            else:
                 self._normal_control()
-            elif self._mode == "incremental":
-                self._incremental_control()
         except TransformException:
             return
 
     # ------------------------------------------------------------------
+    def _record_topics(self):
+        if self._control_mode == "dual":
+            return list(_DUAL_RECORD_TOPICS)
+        return list(_SINGLE_RECORD_TOPICS)
+
+    def _make_record_output(self):
+        prefix = self._record_output_prefix or "bags/vr_teleop"
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        mode = "dual" if self._control_mode == "dual" else "single"
+        return f"{prefix}_{mode}_{timestamp}"
+
+    def _toggle_recording(self):
+        if self._record_proc is not None and self._record_proc.poll() is None:
+            self._stop_recording()
+        else:
+            self._start_recording()
+
+    def _start_recording(self):
+        if self._record_proc is not None and self._record_proc.poll() is None:
+            self.get_logger().warn("Rosbag recording is already running")
+            return
+
+        output = self._make_record_output()
+        output_dir = os.path.dirname(output)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+        cmd = ["ros2", "bag", "record", "-o", output] + self._record_topics()
+        try:
+            self._record_proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            self._record_proc = None
+            self._record_output = None
+            self.get_logger().error(f"Failed to start rosbag recording: {exc}")
+            return
+
+        self._record_output = output
+        self.get_logger().info(f"Rosbag recording STARTED: {output}")
+
+    def _stop_recording(self):
+        if self._record_proc is None:
+            return
+
+        proc = self._record_proc
+        output = self._record_output
+        if proc.poll() is not None:
+            self.get_logger().warn(
+                f"Rosbag recording already stopped: {output}"
+            )
+            self._record_proc = None
+            self._record_output = None
+            return
+
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+            proc.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            self.get_logger().warn(
+                "Rosbag did not stop after SIGINT; terminating process"
+            )
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            try:
+                proc.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                self.get_logger().error(
+                    "Rosbag did not terminate; killing process"
+                )
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                proc.wait(timeout=2.0)
+        except OSError as exc:
+            self.get_logger().warn(f"Failed to stop rosbag process: {exc}")
+        finally:
+            self._record_proc = None
+            self._record_output = None
+
+        self.get_logger().info(f"Rosbag recording STOPPED: {output}")
+
+    def destroy_node(self):
+        self._stop_recording()
+        super().destroy_node()
+
     def _publish_active(self, active):
         msg = Bool(data=active)
         if self._control_mode == "dual":
@@ -453,6 +584,9 @@ class VRTrackerNode(Node):
             self._right_active_pub.publish(msg)
         else:
             self._active_pub.publish(msg)
+
+    def _reset_target_filters(self):
+        self._target_filters.clear()
 
     def _stop_servo_bridge(self):
         self._servo_bridge_stop_pub.publish(Empty())
@@ -654,6 +788,42 @@ class VRTrackerNode(Node):
         pose.pose.orientation.w = float(quat[3])
         return pose
 
+    def _filtered_pose(self, key, pose):
+        if not self._target_filter_enabled:
+            return pose
+
+        a = self._target_filter_alpha
+        raw_p = np.array([
+            pose.pose.position.x,
+            pose.pose.position.y,
+            pose.pose.position.z,
+        ], dtype=float)
+        raw_q = np.array([
+            pose.pose.orientation.x,
+            pose.pose.orientation.y,
+            pose.pose.orientation.z,
+            pose.pose.orientation.w,
+        ], dtype=float)
+        q_norm = np.linalg.norm(raw_q)
+        if q_norm < 1e-9:
+            raw_q = np.array([0.0, 0.0, 0.0, 1.0], dtype=float)
+        else:
+            raw_q = raw_q / q_norm
+
+        prev = self._target_filters.get(key)
+        if prev is None:
+            filt_p = raw_p
+            filt_q = raw_q
+        else:
+            prev_p, prev_q = prev
+            filt_p = a * raw_p + (1.0 - a) * prev_p
+            delta_r = R.from_quat(raw_q) * R.from_quat(prev_q).inv()
+            filt_q = (R.from_rotvec(delta_r.as_rotvec() * a)
+                      * R.from_quat(prev_q)).as_quat()
+
+        self._target_filters[key] = (filt_p, filt_q)
+        return self._make_pose_msg(pose.header.frame_id, filt_p, filt_q)
+
     def _pose_from_calibrated_hand(self, hand_frame, base_frame, side):
         cfg = self._calibration.get(side, {})
         hand_ref = cfg.get("vr_hand_standby") or {}
@@ -732,7 +902,7 @@ class VRTrackerNode(Node):
         if self._mirror_mode:
             self._apply_mirror_x(pose, "right")
 
-        self._pose_pub.publish(pose)
+        self._pose_pub.publish(self._filtered_pose("right", pose))
 
     def _dual_normal_control(self):
         if self._mirror_mode:
@@ -766,9 +936,9 @@ class VRTrackerNode(Node):
                 self._apply_mirror_x(right_pose, "right")
 
         if left_pose is not None:
-            self._left_pose_pub.publish(left_pose)
+            self._left_pose_pub.publish(self._filtered_pose("left", left_pose))
         if right_pose is not None:
-            self._right_pose_pub.publish(right_pose)
+            self._right_pose_pub.publish(self._filtered_pose("right", right_pose))
 
     def _dual_incremental_control(self):
         """Dual-arm incremental mode is reserved; publish absolute dual targets for now."""

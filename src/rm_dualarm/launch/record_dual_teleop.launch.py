@@ -25,6 +25,9 @@ def generate_launch_description():
         # --- real: servo_bridge → rm_driver ---
         "/left/rm_driver/movej_canfd_cmd",
         "/right/rm_driver/movej_canfd_cmd",
+        # --- wrist cameras ---
+        "/left/wrist_camera/color/image_raw",
+        "/right/wrist_camera/color/image_raw",
     ]
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     default_output = f"bags/dual_teleop_{timestamp}"

@@ -31,7 +31,7 @@ angular_derivative_gain: 0.0
 # ---- Low-pass filter (first-order: y[n] = α·x[n] + (1-α)·y[n-1]) ----
 # Applied to TwistStamped output before publishing to servo_node_main.
 filter_enabled: true            # true = enable smoothing
-filter_alpha: 0.4                # 0.0 = max smooth, 1.0 = bypass
+filter_alpha: 0.6                # 0.0 = max smooth, 1.0 = bypass
 
 # ---- Safe zone — clamp target_pose before tracking ----
 # Prevents the arm from being commanded to unreachable positions.

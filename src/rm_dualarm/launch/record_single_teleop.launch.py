@@ -27,6 +27,7 @@ def generate_launch_description():
         "/rm_driver/set_gripper_position_cmd",
         # --- camera ---
         "/camera/image_raw",
+        "/wrist_camera/color/image_raw",
     ]
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     default_output = f"bags/single_teleop_{timestamp}"

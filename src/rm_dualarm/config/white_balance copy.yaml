@@ -1,0 +1,59 @@
+white_balance:
+  generated_at: '2026-07-22T07:13:10.212071+00:00'
+  generated_from_bag: bags/rosbag2_2026_07_22-15_02_21/
+  method: white_paper_roi_channel_gain
+  roi:
+    mode: center
+    center_x_fraction: 0.5
+    center_y_fraction: 0.5
+    width_fraction: 0.2
+    height_fraction: 0.2
+  value_filter:
+    min_value: 20
+    max_value: 245
+    min_pixels_per_frame: 100
+  cameras:
+    camera:
+      topic: /camera/image_raw
+      encoding: rgb8
+      image_size:
+      - 640
+      - 480
+      roi_pixels:
+        x: 256
+        y: 192
+        width: 128
+        height: 96
+      roi_rgb_mean:
+      - 161.7829
+      - 200.4975
+      - 144.8084
+      gains_rgb:
+      - 1.044793
+      - 0.843051
+      - 1.167264
+      frames_seen: 151
+      frames_used: 151
+      valid_pixels: 694853
+    wrist_camera:
+      topic: /wrist_camera/color/image_raw
+      encoding: rgb8
+      image_size:
+      - 640
+      - 480
+      roi_pixels:
+        x: 256
+        y: 192
+        width: 128
+        height: 96
+      roi_rgb_mean:
+      - 168.5351
+      - 174.7299
+      - 174.027
+      gains_rgb:
+      - 1.023114
+      - 0.986842
+      - 0.990827
+      frames_seen: 151
+      frames_used: 151
+      valid_pixels: 159286
