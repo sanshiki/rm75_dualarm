@@ -17,7 +17,7 @@ scale:
   joint: 0.2                      # Max joint velocity [rad/s]
 
 # ---- Outgoing command properties ----
-publish_period: 0.075
+publish_period: 0.05
 low_latency_mode: true
 
 command_out_type: trajectory_msgs/JointTrajectory
