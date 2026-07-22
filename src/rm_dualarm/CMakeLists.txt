@@ -48,11 +48,13 @@ install(PROGRAMS
   src/vr_teleop_node.py
   src/vr_base_broadcaster.py
   src/camera_marker_calibration_node.py
+  src/image_white_balance_node.py
   scripts/pose_init.py
   scripts/vr_calibration_capture.py
   scripts/analyze_dual_teleop_bag.py
   scripts/analyze_single_teleop_bag.py
   scripts/npy_convert.py
+  scripts/calibrate_white_balance.py
   scripts/dual_joint_state_merger.py
   scripts/relay_receiver.py
   scripts/trajectory_relay.py
