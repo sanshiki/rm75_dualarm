@@ -58,6 +58,7 @@ install(PROGRAMS
   scripts/dual_joint_state_merger.py
   scripts/relay_receiver.py
   scripts/trajectory_relay.py
+  scripts/inspect_npy.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

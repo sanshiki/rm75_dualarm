@@ -1,11 +1,11 @@
 #!/usr/bin/python3
-"""Estimate per-camera RGB white-balance gains from a rosbag2 image ROI."""
+"""Estimate per-camera RGB white-balance gains from rosbag2 images."""
 
 import argparse
 from datetime import datetime, timezone
 import os
 import re
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import rosbag2_py
@@ -18,10 +18,18 @@ DEFAULT_TOPICS = [
     "/camera/image_raw",
     "/wrist_camera/color/image_raw",
 ]
+DEFAULT_REFERENCE_TOPIC = "/wrist_camera/color/image_raw"
 
 SUPPORTED_ENCODINGS = {
     "rgb8": (3, (0, 1, 2)),
     "bgr8": (3, (2, 1, 0)),
+}
+
+NORMALIZE_CHANNELS = {
+    "none": None,
+    "r": 0,
+    "g": 1,
+    "b": 2,
 }
 
 
@@ -134,6 +142,42 @@ def _clamp_roi(
     return x, y, roi_w, roi_h
 
 
+def _image_to_rgb(msg, topic: str) -> Tuple[np.ndarray, str]:
+    encoding = msg.encoding.lower()
+    if encoding not in SUPPORTED_ENCODINGS:
+        raise ValueError(
+            f"{topic} uses unsupported encoding '{msg.encoding}'. "
+            f"Supported: {', '.join(sorted(SUPPORTED_ENCODINGS))}"
+        )
+
+    channels, rgb_order = SUPPORTED_ENCODINGS[encoding]
+    expected_step = msg.width * channels
+    if msg.step < expected_step:
+        raise ValueError(
+            f"{topic} has invalid step {msg.step}; expected at least {expected_step}"
+        )
+
+    data = np.frombuffer(msg.data, dtype=np.uint8)
+    expected_len = msg.height * msg.step
+    if data.size < expected_len:
+        raise ValueError(
+            f"{topic} data is truncated: {data.size} bytes, expected {expected_len}"
+        )
+
+    rows = data[:expected_len].reshape(msg.height, msg.step)
+    image = rows[:, :expected_step].reshape(msg.height, msg.width, channels)
+    return image[:, :, rgb_order].astype(np.float32), encoding
+
+
+def _normalize_gains(gains: np.ndarray, channel: Optional[int]) -> np.ndarray:
+    if channel is None:
+        return gains
+    scale = float(gains[channel])
+    if scale <= 0.0:
+        raise RuntimeError(f"cannot normalize gains with non-positive scale {scale}")
+    return gains / scale
+
+
 class TopicStats:
     def __init__(self, topic: str, camera_key: str):
         self.topic = topic
@@ -150,30 +194,7 @@ class TopicStats:
 
     def add_image(self, msg, roi_spec: str, min_value: int, max_value: int, min_pixels: int):
         self.frames_seen += 1
-        encoding = msg.encoding.lower()
-        if encoding not in SUPPORTED_ENCODINGS:
-            raise ValueError(
-                f"{self.topic} uses unsupported encoding '{msg.encoding}'. "
-                f"Supported: {', '.join(sorted(SUPPORTED_ENCODINGS))}"
-            )
-
-        channels, rgb_order = SUPPORTED_ENCODINGS[encoding]
-        expected_step = msg.width * channels
-        if msg.step < expected_step:
-            raise ValueError(
-                f"{self.topic} has invalid step {msg.step}; expected at least {expected_step}"
-            )
-
-        data = np.frombuffer(msg.data, dtype=np.uint8)
-        expected_len = msg.height * msg.step
-        if data.size < expected_len:
-            raise ValueError(
-                f"{self.topic} data is truncated: {data.size} bytes, expected {expected_len}"
-            )
-
-        rows = data[:expected_len].reshape(msg.height, msg.step)
-        image = rows[:, :expected_step].reshape(msg.height, msg.width, channels)
-        rgb_image = image[:, :, rgb_order]
+        rgb_image, encoding = _image_to_rgb(msg, self.topic)
 
         if self.roi_pixels is None:
             self.width = int(msg.width)
@@ -219,7 +240,74 @@ class TopicStats:
         }
 
 
-def calibrate(args) -> Dict:
+class MatchTopicStats:
+    def __init__(self, topic: str, camera_key: str):
+        self.topic = topic
+        self.camera_key = camera_key
+        self.encoding = ""
+        self.width = 0
+        self.height = 0
+        self.frames_seen = 0
+        self.frames_used = 0
+        self.valid_pixels = 0
+        self.frame_rgb_means: List[np.ndarray] = []
+
+    def add_image(
+        self,
+        msg,
+        min_value: int,
+        max_value: int,
+        min_pixels: int,
+        trim_percent: float,
+    ):
+        self.frames_seen += 1
+        rgb_image, encoding = _image_to_rgb(msg, self.topic)
+
+        if not self.encoding:
+            self.width = int(msg.width)
+            self.height = int(msg.height)
+            self.encoding = encoding
+
+        mask = (
+            (rgb_image.min(axis=2) >= min_value)
+            & (rgb_image.max(axis=2) <= max_value)
+        )
+        count = int(mask.sum())
+        if count < min_pixels:
+            return
+
+        values = rgb_image[mask]
+        if trim_percent > 0.0:
+            low = np.percentile(values, trim_percent, axis=0)
+            high = np.percentile(values, 100.0 - trim_percent, axis=0)
+            trimmed = np.all((values >= low) & (values <= high), axis=1)
+            if int(trimmed.sum()) >= min_pixels:
+                values = values[trimmed]
+
+        self.frames_used += 1
+        self.valid_pixels += count
+        self.frame_rgb_means.append(values.mean(axis=0))
+
+    def rgb_stat(self) -> np.ndarray:
+        if not self.frame_rgb_means:
+            raise RuntimeError(f"{self.topic}: no valid pixels after filtering")
+        return np.median(np.asarray(self.frame_rgb_means, dtype=np.float64), axis=0)
+
+    def result(self, gains: np.ndarray) -> Dict:
+        stat = self.rgb_stat()
+        return {
+            "topic": self.topic,
+            "encoding": self.encoding,
+            "image_size": [self.width, self.height],
+            "match_rgb_stat": [round(float(v), 4) for v in stat],
+            "gains_rgb": [round(float(v), 6) for v in gains],
+            "frames_seen": int(self.frames_seen),
+            "frames_used": int(self.frames_used),
+            "valid_pixels": int(self.valid_pixels),
+        }
+
+
+def _prepare_topics(args) -> Tuple[List[str], List[str]]:
     topics = _split_csv(args.topics)
     if not topics:
         raise ValueError("At least one image topic is required")
@@ -231,7 +319,10 @@ def calibrate(args) -> Dict:
         keys = [_default_camera_key(topic) for topic in topics]
     if len(set(keys)) != len(keys):
         raise ValueError(f"camera keys must be unique, got: {keys}")
+    return topics, keys
 
+
+def calibrate_white_paper(args, topics: List[str], keys: List[str]) -> Dict:
     stats = {
         topic: TopicStats(topic, camera_key)
         for topic, camera_key in zip(topics, keys)
@@ -286,9 +377,91 @@ def calibrate(args) -> Dict:
     }
 
 
+def calibrate_camera_match(args, topics: List[str], keys: List[str]) -> Dict:
+    if args.reference_topic not in topics:
+        raise ValueError("--reference-topic must be included in --topics")
+
+    stats = {
+        topic: MatchTopicStats(topic, camera_key)
+        for topic, camera_key in zip(topics, keys)
+    }
+
+    reader = rosbag2_py.SequentialReader()
+    reader.open(
+        rosbag2_py.StorageOptions(uri=args.bag, storage_id=args.storage_id),
+        rosbag2_py.ConverterOptions("", ""),
+    )
+    topic_types = {item.name: item.type for item in reader.get_all_topics_and_types()}
+    missing = [topic for topic in topics if topic not in topic_types]
+    if missing:
+        raise RuntimeError(f"Topics not found in bag: {', '.join(missing)}")
+
+    image_types = {
+        topic: get_message(topic_types[topic])
+        for topic in topics
+    }
+    while reader.has_next():
+        topic, data, _ = reader.read_next()
+        if topic not in stats:
+            continue
+        msg = deserialize_message(data, image_types[topic])
+        stats[topic].add_image(
+            msg,
+            args.min_value,
+            args.max_value,
+            args.min_pixels,
+            args.trim_percent,
+        )
+
+    reference_rgb = stats[args.reference_topic].rgb_stat()
+    normalize_channel = NORMALIZE_CHANNELS[args.normalize_channel]
+    cameras = {}
+    for topic in topics:
+        raw_gains = reference_rgb / np.maximum(stats[topic].rgb_stat(), 1.0)
+        gains = _normalize_gains(raw_gains, normalize_channel)
+        cameras[stats[topic].camera_key] = stats[topic].result(gains)
+
+    return {
+        "white_balance": {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_from_bag": args.bag,
+            "method": "camera_to_camera_match",
+            "reference_topic": args.reference_topic,
+            "roi": {"mode": "full_image"},
+            "statistic": "per_frame_trimmed_mean_then_median",
+            "value_filter": {
+                "min_value": int(args.min_value),
+                "max_value": int(args.max_value),
+                "min_pixels_per_frame": int(args.min_pixels),
+                "trim_percent": float(args.trim_percent),
+                "normalize_channel": args.normalize_channel,
+            },
+            "cameras": cameras,
+        }
+    }
+
+
+def calibrate(args) -> Dict:
+    topics, keys = _prepare_topics(args)
+    if args.method == "white-paper-roi":
+        return calibrate_white_paper(args, topics, keys)
+    if args.method == "camera-match":
+        return calibrate_camera_match(args, topics, keys)
+    raise ValueError(f"unknown method: {args.method}")
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Estimate RGB white-balance gains from white-paper ROIs in a rosbag2."
+        description="Estimate RGB white-balance gains from rosbag2 images."
+    )
+    parser.add_argument(
+        "--method",
+        choices=["white-paper-roi", "camera-match"],
+        default="white-paper-roi",
+        help=(
+            "Calibration method. white-paper-roi assumes the ROI is neutral; "
+            "camera-match matches all topics to --reference-topic."
+        ),
     )
     parser.add_argument("--bag", required=True, help="Path to a rosbag2 directory")
     parser.add_argument(
@@ -316,6 +489,26 @@ def main():
             "fraction:x:y:w:h, or pixel:x:y:w:h."
         ),
     )
+    parser.add_argument(
+        "--reference-topic",
+        default=DEFAULT_REFERENCE_TOPIC,
+        help="Reference image topic for --method camera-match.",
+    )
+    parser.add_argument(
+        "--normalize-channel",
+        choices=sorted(NORMALIZE_CHANNELS.keys()),
+        default="g",
+        help=(
+            "For camera-match, normalize gains so this channel is 1. "
+            "Use 'none' to also match overall brightness."
+        ),
+    )
+    parser.add_argument(
+        "--trim-percent",
+        type=float,
+        default=5.0,
+        help="For camera-match, trim this percent from each channel per frame.",
+    )
     parser.add_argument("--min-value", type=int, default=20, help="Reject darker ROI pixels.")
     parser.add_argument("--max-value", type=int, default=245, help="Reject saturated ROI pixels.")
     parser.add_argument(
@@ -331,6 +524,8 @@ def main():
         raise ValueError("--min-value and --max-value must be in [0, 255]")
     if args.min_value >= args.max_value:
         raise ValueError("--min-value must be less than --max-value")
+    if not (0.0 <= args.trim_percent < 50.0):
+        raise ValueError("--trim-percent must be in [0, 50)")
 
     data = calibrate(args)
     output_dir = os.path.dirname(os.path.abspath(args.output))
@@ -341,7 +536,8 @@ def main():
 
     for key, camera in data["white_balance"]["cameras"].items():
         gains = ", ".join(f"{value:.6f}" for value in camera["gains_rgb"])
-        mean = ", ".join(f"{value:.2f}" for value in camera["roi_rgb_mean"])
+        rgb_stat = camera.get("roi_rgb_mean", camera.get("match_rgb_stat"))
+        mean = ", ".join(f"{value:.2f}" for value in rgb_stat)
         print(
             f"{key}: topic={camera['topic']} frames={camera['frames_used']}/"
             f"{camera['frames_seen']} mean_rgb=[{mean}] gains_rgb=[{gains}]"

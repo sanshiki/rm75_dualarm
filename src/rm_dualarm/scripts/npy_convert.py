@@ -14,6 +14,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import rosbag2_py
+import yaml
 from rclpy.serialization import deserialize_message
 from rosidl_runtime_py.utilities import get_message
 from scipy.spatial.transform import Rotation as R
@@ -21,6 +22,7 @@ from scipy.spatial.transform import Rotation as R
 
 DEFAULT_BAG_ROOT = "bags/single"
 DEFAULT_OUTPUT_ROOT = "convert_result"
+DEFAULT_WHITE_BALANCE_CONFIG = "src/rm_dualarm/config/white_balance.yaml"
 
 FIXED_TOPICS = {
     "camera": "/camera/image_raw",
@@ -29,6 +31,11 @@ FIXED_TOPICS = {
     "tf_static": "/tf_static",
 }
 
+WRIST_CAMERA_CANDIDATES = [
+    "/wrist_camera/color/image_raw",
+    "/left/wrist_camera/color/image_raw",
+    "/right/wrist_camera/color/image_raw",
+]
 TARGET_CANDIDATES = ["/target_pose"]
 GRIPPER_CANDIDATES = [
     "/rm_driver/set_gripper_position_cmd",
@@ -42,6 +49,7 @@ TRAJ_CMD_CANDIDATES = [
 
 BASE_FRAME = "base_link"
 LINK_CHAIN = [f"Link{i}" for i in range(1, 8)]
+ACTION_LAYOUT = ["dx", "dy", "dz", "droll", "dpitch", "dyaw", "gripper"]
 
 
 def slugify(text):
@@ -74,6 +82,10 @@ def resolve_topics(topic_types):
     for key, topic in FIXED_TOPICS.items():
         if topic in topics:
             resolved[key] = topic
+    for topic in WRIST_CAMERA_CANDIDATES:
+        if topic in topics:
+            resolved["wrist_camera"] = topic
+            break
     for topic in TARGET_CANDIDATES:
         if topic in topics:
             resolved["target_pose"] = topic
@@ -154,6 +166,126 @@ def image_to_rgb(msg):
         return np.ascontiguousarray(image)
 
     raise ValueError(f"unsupported image encoding: {msg.encoding}")
+
+
+def apply_white_balance(image, gains_rgb):
+    if gains_rgb is None:
+        return image
+    gains = np.asarray(gains_rgb, dtype=np.float32)
+    return np.clip(image.astype(np.float32) * gains, 0.0, 255.0).astype(np.uint8)
+
+
+def load_white_balance_config(path):
+    if not path:
+        return {}
+    config_path = Path(path)
+    if not config_path.exists():
+        raise FileNotFoundError(f"white balance config not found: {config_path}")
+    with open(config_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    root = data.get("white_balance", data)
+    cameras = root.get("cameras", {})
+    if not isinstance(cameras, dict):
+        raise ValueError(f"{config_path} does not contain white_balance.cameras")
+    return cameras
+
+
+def _camera_gains_from_config(cameras, camera_key, topic):
+    camera = cameras.get(camera_key)
+    if camera is None:
+        for candidate in cameras.values():
+            if candidate.get("topic") == topic:
+                camera = candidate
+                break
+    if camera is None:
+        return None
+
+    gains = camera.get("gains_rgb", camera.get("gains"))
+    if not isinstance(gains, list) or len(gains) != 3:
+        raise ValueError(f"white balance gains for {camera_key} must be a 3-element list")
+    gains_rgb = np.asarray(gains, dtype=np.float32)
+    if not np.all(np.isfinite(gains_rgb)) or np.any(gains_rgb <= 0.0):
+        raise ValueError(f"invalid white balance gains for {camera_key}: {gains}")
+    return gains_rgb
+
+
+def resolve_white_balance_gains(resolved, args):
+    if not args.apply_white_balance:
+        return {}, None
+    cameras = load_white_balance_config(args.white_balance_config)
+    gains = {}
+    for key in ("camera", "wrist_camera"):
+        topic = resolved.get(key)
+        if not topic:
+            continue
+        camera_gains = _camera_gains_from_config(cameras, key, topic)
+        if camera_gains is not None:
+            gains[key] = camera_gains
+        else:
+            print(f"[warn] no white balance gains for {key} topic {topic}")
+    return gains, str(Path(args.white_balance_config))
+
+
+def resolve_action_normalization(args):
+    if args.action_min is None and args.action_max is None:
+        return None
+    if args.action_min is None or args.action_max is None:
+        raise ValueError("--action-min and --action-max must be provided together")
+
+    raw_min = np.asarray(args.action_min, dtype=np.float32)
+    raw_max = np.asarray(args.action_max, dtype=np.float32)
+    target_min, target_max = (float(value) for value in args.action_normalized_range)
+
+    if raw_min.shape != (len(ACTION_LAYOUT),) or raw_max.shape != (len(ACTION_LAYOUT),):
+        raise ValueError(f"--action-min and --action-max must each have {len(ACTION_LAYOUT)} values")
+    if not np.all(np.isfinite(raw_min)) or not np.all(np.isfinite(raw_max)):
+        raise ValueError("--action-min and --action-max must be finite")
+    if np.any(raw_max <= raw_min):
+        raise ValueError("--action-max values must be greater than --action-min values")
+    if not np.isfinite(target_min) or not np.isfinite(target_max) or target_max <= target_min:
+        raise ValueError("--action-normalized-range must be finite and increasing")
+
+    return {
+        "raw_min": raw_min,
+        "raw_max": raw_max,
+        "target_min": target_min,
+        "target_max": target_max,
+        "clip": bool(args.clip_normalized_action),
+    }
+
+
+def normalize_action(action, normalization):
+    action = np.asarray(action, dtype=np.float32)
+    if normalization is None:
+        return action
+    raw_min = normalization["raw_min"]
+    raw_max = normalization["raw_max"]
+    target_min = normalization["target_min"]
+    target_max = normalization["target_max"]
+    normalized = (action - raw_min) / (raw_max - raw_min)
+    normalized = normalized * (target_max - target_min) + target_min
+    # handle gripper value
+    normalized[6] = -1 if normalized[6] < 0 else 1
+    if normalization["clip"]:
+        normalized = np.clip(normalized, target_min, target_max)
+    return normalized.astype(np.float32)
+
+
+def action_normalization_metadata(normalization):
+    if normalization is None:
+        return {
+            "normalized": False,
+            "layout": ACTION_LAYOUT,
+        }
+    return {
+        "normalized": True,
+        "layout": ACTION_LAYOUT,
+        "raw_min": [float(value) for value in normalization["raw_min"]],
+        "raw_max": [float(value) for value in normalization["raw_max"]],
+        "target_min": float(normalization["target_min"]),
+        "target_max": float(normalization["target_max"]),
+        "clip": bool(normalization["clip"]),
+    }
 
 
 def pose_record(time_sec, pose):
@@ -264,10 +396,11 @@ def gripper_records(rows):
     return sorted(records, key=lambda item: item["time"])
 
 
-def image_records(rows):
+def image_records(rows, gains_rgb=None):
     records = []
     for t, msg in rows:
-        records.append({"time": msg_time(t, msg), "image": image_to_rgb(msg)})
+        image = apply_white_balance(image_to_rgb(msg), gains_rgb)
+        records.append({"time": msg_time(t, msg), "image": image})
     return sorted(records, key=lambda item: item["time"])
 
 
@@ -303,8 +436,15 @@ def sample_times(image_recs, eef_recs, target_recs, control_hz):
     return list(np.arange(start, end + 1e-9, step))
 
 
-def make_episode(messages, resolved, args):
-    images = image_records(messages.get(resolved.get("camera", ""), []))
+def make_episode(messages, resolved, args, white_balance_gains, action_normalization):
+    images = image_records(
+        messages.get(resolved.get("camera", ""), []),
+        white_balance_gains.get("camera"),
+    )
+    wrist_images = image_records(
+        messages.get(resolved.get("wrist_camera", ""), []),
+        white_balance_gains.get("wrist_camera"),
+    )
     eef = eef_pose_records(
         messages.get(resolved.get("tf", ""), []),
         messages.get(resolved.get("tf_static", ""), []),
@@ -320,6 +460,7 @@ def make_episode(messages, resolved, args):
         raise RuntimeError("missing end-effector TF")
 
     use_target_pose = bool(targets)
+    use_wrist_camera = bool(wrist_images)
     times = sample_times(images, eef, targets if use_target_pose else [], args.control_hz)
     episode = []
     max_image_dt = 0.5 / float(args.control_hz)
@@ -327,8 +468,11 @@ def make_episode(messages, resolved, args):
 
     for index, time_sec in enumerate(times):
         image = nearest(images, time_sec, max_dt=max_image_dt)
+        wrist_image = nearest(wrist_images, time_sec, max_dt=max_image_dt) if use_wrist_camera else None
         current = nearest(eef, time_sec, max_dt=max_state_dt)
         if image is None or current is None:
+            continue
+        if use_wrist_camera and wrist_image is None:
             continue
 
         target = nearest(targets, time_sec, max_dt=max_state_dt) if use_target_pose else None
@@ -341,13 +485,14 @@ def make_episode(messages, resolved, args):
 
         gripper = nearest(grippers, time_sec)
         gripper_value = float(gripper["value"]) if gripper else args.default_gripper
-        action = np.concatenate([pose_delta(current, target), np.array([gripper_value], dtype=np.float32)])
+        raw_action = np.concatenate([pose_delta(current, target), np.array([gripper_value], dtype=np.float32)])
+        action = normalize_action(raw_action, action_normalization)
 
         joint = nearest(joints, time_sec)
         traj_cmd = nearest(traj_cmds, time_sec)
         step = {
             "images": image["image"],
-            "prompt": args.prompt,
+            "task_description": args.task_description,
             "action": action.astype(np.float32).tolist(),
             "timestamp": float(time_sec),
             "image_timestamp": float(image["time"]),
@@ -356,6 +501,11 @@ def make_episode(messages, resolved, args):
             "target_pose": np.concatenate([target["position"], target["quat"]]).astype(np.float32),
             "gripper_cmd": float(gripper_value),
         }
+        if action_normalization is not None:
+            step["raw_action"] = raw_action.astype(np.float32).tolist()
+        if wrist_image is not None:
+            step["wrist_images"] = wrist_image["image"]
+            step["wrist_image_timestamp"] = float(wrist_image["time"])
         if joint is not None:
             step["joint_state"] = joint["position"]
             step["joint_names"] = joint["name"]
@@ -368,20 +518,22 @@ def make_episode(messages, resolved, args):
 
     duration = episode[-1]["timestamp"] - episode[0]["timestamp"] if len(episode) > 1 else 0.0
     image_shape = list(episode[0]["images"].shape)
+    wrist_image_shape = list(episode[0]["wrist_images"].shape) if "wrist_images" in episode[0] else None
     sync_policy = "control_time_nearest_neighbor"
     action_source = "target_pose_delta" if use_target_pose else "eef_next_pose_delta"
     return episode, {
         "duration_sec": float(duration),
         "image_shape": image_shape,
+        "wrist_image_shape": wrist_image_shape,
         "sync_policy": sync_policy,
         "action_source": action_source,
     }
 
 
-def write_video_ffmpeg(path, episode, fps, ffmpeg_bin):
-    if not episode:
+def write_video_ffmpeg(path, frames, fps, ffmpeg_bin):
+    if not frames:
         return "none"
-    first = episode[0]["images"]
+    first = frames[0]
     height, width = first.shape[:2]
     cmd = [
         ffmpeg_bin,
@@ -403,8 +555,7 @@ def write_video_ffmpeg(path, episode, fps, ffmpeg_bin):
     ]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
-        for step in episode:
-            rgb = step["images"]
+        for rgb in frames:
             if rgb.shape[:2] != (height, width):
                 raise RuntimeError("all video frames must have the same resolution")
             proc.stdin.write(np.ascontiguousarray(rgb, dtype=np.uint8).tobytes())
@@ -420,10 +571,10 @@ def write_video_ffmpeg(path, episode, fps, ffmpeg_bin):
     return "h264"
 
 
-def write_video_opencv(path, episode, fps):
-    if not episode:
+def write_video_opencv(path, frames, fps):
+    if not frames:
         return "none"
-    first = episode[0]["images"]
+    first = frames[0]
     height, width = first.shape[:2]
     codecs = ("avc1", "H264", "mp4v")
     writer = None
@@ -439,8 +590,7 @@ def write_video_opencv(path, episode, fps):
     if writer is None:
         raise RuntimeError(f"failed to open video writer: {path}")
     try:
-        for step in episode:
-            rgb = step["images"]
+        for rgb in frames:
             if rgb.shape[:2] != (height, width):
                 raise RuntimeError("all video frames must have the same resolution")
             writer.write(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
@@ -449,36 +599,55 @@ def write_video_opencv(path, episode, fps):
     return codec
 
 
-def write_video(path, episode, fps):
+def write_video(path, frames, fps):
     ffmpeg_bin = shutil.which("ffmpeg")
     if ffmpeg_bin:
-        return write_video_ffmpeg(path, episode, fps, ffmpeg_bin)
+        return write_video_ffmpeg(path, frames, fps, ffmpeg_bin)
     print("[warn] ffmpeg not found; falling back to OpenCV video writer")
-    return write_video_opencv(path, episode, fps)
+    return write_video_opencv(path, frames, fps)
 
 
 def write_episode(out_dir, episode, metadata, write_mp4, fps):
     out_dir.mkdir(parents=True, exist_ok=True)
     np.save(out_dir / "episode.npy", np.asarray(episode, dtype=object), allow_pickle=True)
     if write_mp4:
-        codec = write_video(out_dir / "episode.mp4", episode, fps)
+        codec = write_video(out_dir / "episode.mp4", [step["images"] for step in episode], fps)
         metadata["image"]["video_codec"] = codec
+        if "wrist_images" in episode[0]:
+            wrist_codec = write_video(
+                out_dir / "wrist_episode.mp4",
+                [step["wrist_images"] for step in episode],
+                fps,
+            )
+            metadata["image"]["wrist_video_codec"] = wrist_codec
     with open(out_dir / "metadata.json", "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2, ensure_ascii=False)
 
 
 def convert_bag(bag_path, out_dir, episode_id, resolved, messages, args, stats):
-    episode, extra = make_episode(messages, resolved, args)
+    white_balance_gains, white_balance_config = resolve_white_balance_gains(resolved, args)
+    episode, extra = make_episode(
+        messages,
+        resolved,
+        args,
+        white_balance_gains,
+        args.action_normalization,
+    )
+    white_balance_metadata = {
+        key: [float(value) for value in gains]
+        for key, gains in white_balance_gains.items()
+    }
     metadata = {
-        "task": {
-            "raw_name": args.task,
-            "slug": args.task_slug,
-            "prompt": args.prompt,
-        },
+        "task_description": args.task_description,
         "episode": {
             "id": episode_id,
             "file": "episode.npy",
             "video": "episode.mp4" if args.video else None,
+            "wrist_video": (
+                "wrist_episode.mp4"
+                if args.video and extra["wrist_image_shape"] is not None
+                else None
+            ),
             "success": args.success,
             "score": args.score,
             "num_steps": len(episode),
@@ -488,6 +657,7 @@ def convert_bag(bag_path, out_dir, episode_id, resolved, messages, args, stats):
             "type": "ros2_rosbag",
             "rosbag": str(bag_path.resolve()),
             "camera_topic": resolved.get("camera"),
+            "wrist_camera_topic": resolved.get("wrist_camera"),
             "tf_topic": resolved.get("tf"),
             "target_pose_topic": resolved.get("target_pose"),
             "traj_cmd_topic": resolved.get("traj_cmd"),
@@ -506,15 +676,24 @@ def convert_bag(bag_path, out_dir, episode_id, resolved, messages, args, stats):
             "position_unit": "meter",
             "rotation_unit": "radian",
             "frame": BASE_FRAME,
-            "layout": ["dx", "dy", "dz", "droll", "dpitch", "dyaw", "gripper"],
+            "layout": ACTION_LAYOUT,
             "gripper_open_value": 1.0,
             "gripper_closed_value": 0.0,
+            "normalization": action_normalization_metadata(args.action_normalization),
         },
         "image": {
             "encoding": "rgb_uint8",
             "shape": extra["image_shape"],
+            "wrist_shape": extra["wrist_image_shape"],
             "camera_view": "primary",
+            "wrist_camera_view": "wrist" if extra["wrist_image_shape"] is not None else None,
             "video_fps": args.video_fps,
+            "white_balance": {
+                "enabled": bool(args.apply_white_balance),
+                "applied": bool(white_balance_metadata),
+                "config": white_balance_config,
+                "gains_rgb": white_balance_metadata,
+            },
         },
     }
     write_episode(out_dir, episode, metadata, args.video, args.video_fps)
@@ -527,14 +706,28 @@ def parse_args():
                         help=f"rosbag directory or parent directory (default: {DEFAULT_BAG_ROOT})")
     parser.add_argument("-o", "--output", default=DEFAULT_OUTPUT_ROOT,
                         help=f"output root directory (default: {DEFAULT_OUTPUT_ROOT})")
-    parser.add_argument("--task", default="teleop task", help="raw task name")
-    parser.add_argument("--task-slug", default="", help="filesystem-safe task slug")
-    parser.add_argument("--prompt", default="", help="language instruction stored in every step")
+    parser.add_argument("--task-description", default="teleop task",
+                        help="language task description stored in every step")
     parser.add_argument("--control-hz", type=float, default=20.0, help="output sampling rate")
     parser.add_argument("--video-fps", type=float, default=None,
                         help="episode.mp4 FPS (default: same as --control-hz)")
     parser.add_argument("--video", action=argparse.BooleanOptionalAction, default=True,
                         help="write episode.mp4 beside episode.npy (default: true)")
+    parser.add_argument("--apply-white-balance", action=argparse.BooleanOptionalAction, default=True,
+                        help="apply RGB gains from --white-balance-config to images (default: true)")
+    parser.add_argument("--white-balance-config", default=DEFAULT_WHITE_BALANCE_CONFIG,
+                        help=f"white balance YAML path (default: {DEFAULT_WHITE_BALANCE_CONFIG})")
+    parser.add_argument("--action-min", nargs=len(ACTION_LAYOUT), type=float, default=[-0.2, -0.2, -0.2, -0.5, -0.5, -0.5, 0.0],
+                        metavar="VALUE",
+                        help="raw action lower bounds for dx dy dz droll dpitch dyaw gripper")
+    parser.add_argument("--action-max", nargs=len(ACTION_LAYOUT), type=float, default=[0.2, 0.2, 0.2, 0.5, 0.5, 0.5, 1.0],
+                        metavar="VALUE",
+                        help="raw action upper bounds for dx dy dz droll dpitch dyaw gripper")
+    parser.add_argument("--action-normalized-range", nargs=2, type=float, default=[-1.0, 1.0],
+                        metavar=("MIN", "MAX"),
+                        help="target range when --action-min/--action-max are set (default: -1 1)")
+    parser.add_argument("--clip-normalized-action", action=argparse.BooleanOptionalAction, default=True,
+                        help="clip normalized action to --action-normalized-range (default: true)")
     parser.add_argument("--default-gripper", type=float, default=1.0,
                         help="gripper value when no command exists")
     parser.add_argument("--success", action=argparse.BooleanOptionalAction, default=None,
@@ -545,17 +738,16 @@ def parse_args():
 
 def main():
     args = parse_args()
-    if not args.prompt:
-        args.prompt = args.task
-    args.task_slug = args.task_slug or slugify(args.task)
+    task_slug = slugify(args.task_description)
     if args.video_fps is None:
         args.video_fps = args.control_hz
+    args.action_normalization = resolve_action_normalization(args)
 
     bags = discover_bags(args.bag_path)
     if not bags:
         raise SystemExit(f"no rosbag directories found under {args.bag_path}")
 
-    task_root = Path(args.output) / args.task_slug
+    task_root = Path(args.output) / task_slug
     stats = []
     episode_id = 0
     for bag_path in bags:

@@ -35,7 +35,10 @@ ros2 launch rm_dualarm real_bringup.launch.py arm_ip:=192.168.1.18
 
  - 相机
 ```bash
+# 主视相机
 ros2 launch rm_dualarm camera.launch.py 
+# 腕部相机
+ros2 launch rm_dualarm wrist_cameras.launch.py control_mode:=single
 ```
 
 ## rm_dualarm — 双臂伺服与遥操作
@@ -82,7 +85,7 @@ teleop → /left/target_pose, /right/target_pose
 | 模块 | 文件 | 功能 |
 |------|------|------|
 | mouse_teleop | `src/mouse_teleop_node.py` | 屏幕绝对位置→YZ平面映射，左键拖动控制 |
-| vr_teleop | `src/vr_teleop_node.py` | VR 手部追踪，支持 normal/incremental 模式 |
+| vr_teleop | `src/vr_teleop_node.py` | VR 手部追踪，输出滤波后的目标位姿，支持 B 键 rosbag 录制 |
 | pose_tracking | `src/pose_tracking_node.py` | PID 位姿跟踪 + 安全区 clamp + 低通滤波 |
 | servo_bridge | `src/servo_bridge.cpp` | Servo JointTrajectory → rm_driver CANFD (50Hz) |
 | pose_init | `scripts/pose_init.py` | 初始化机械臂到非奇异位姿 (move_group 规划) |
@@ -140,22 +143,13 @@ ros2 launch rm_dualarm servo_sim.launch.py control_mode:=dual teleop_type:=mouse
 ros2 launch rm_dualarm servo_sim.launch.py control_mode:=dual teleop_type:=vr
 ```
 
-鼠标测试时，按住左键开始发布左右目标；松开左键停止。VR 测试时，三击 A 激活/取消，按住 RB 阻塞输出，B 切换 normal/incremental 模式。VR 输入来自 `/quest/joystick` 和 TF `hand_left`、`hand_right`；不连接 TCP relay 做本地测试时可用：
+鼠标测试时，按住左键开始发布左右目标；松开左键停止。VR 测试时，三击 A 激活/取消，按住 RB 阻塞输出，按 B 开始/结束 rosbag 录制。VR 输入来自 `/quest/joystick` 和 TF `hand_left`、`hand_right`；不连接 TCP relay 做本地测试时可用：
 
 ```bash
 ros2 launch rm_dualarm vr_teleop.launch.py control_mode:=dual use_relay_receiver:=false
 ```
 
-VR 标定参数模板在 `config/vr_calibration.yaml`。实际测试建议为每个操作者生成一份标定文件：先确认双臂已经由 `pose_init` 到达 `standby_pose.yaml` 定义的待机动作；操作者直立，双手自然握遥控器，大臂紧贴身体下垂，小臂 90 度平行地面抬起，保持遥控器和地面平行，然后按 `Y` 采样。脚本会记录该预设动作下的头显高度、左右手位姿和左右机械臂末端待机位姿，并生成 `schema_version: 2` 标定文件。
-
-```bash
-ros2 launch rm_dualarm vr_calibration.launch.py output_file:=/tmp/vr_calibration.yaml
-# 保持预设动作，按 Y；默认采样 2 秒求均值
-ros2 launch rm_dualarm servo_sim.launch.py control_mode:=dual teleop_type:=vr \
-  vr_calibration_file:=/tmp/vr_calibration.yaml
-```
-
-新版标定会把预设动作绑定到机械臂待机末端位姿，之后按手部相对预设动作的增量控制目标。若要调整灵敏度，修改生成文件中的 `left/right.position_scale`；若某套 VR 坐标的右手 Y 方向相反，可把 `right.position_scale` 改成 `[1.0, -1.0, 1.0]`；若要减弱姿态跟随，修改 `left/right.rotation_scale`。
+VR 标定和手柄操作见下方“VR遥操作控制”。
 
 链路验证命令：
 
@@ -186,17 +180,14 @@ ros2 launch rm_dualarm dual_sim_bringup.launch.py gazebo_gui:=false
 # T1: 真机 bringup (rm_driver + rm_control + move_group + 可选 pose_init)
 ros2 launch rm_dualarm real_bringup.launch.py arm_ip:=192.168.1.18
 # T2: Servo + 遥操作
-ros2 launch rm_dualarm servo_real.launch.py control_mode:=single teleop_type:=mouse
-
-# T1 (可选): 带待机位初始化
-ros2 launch rm_dualarm real_bringup.launch.py arm_ip:=192.168.1.18 use_pose_init:=true
+ros2 launch rm_dualarm servo_real.launch.py control_mode:=single teleop_type:=vr
 
 # === 双臂真机 ===
 # T1: 双臂 bringup (两个 rm_driver + joint_state_merger + move_group)
 ros2 launch rm_dualarm dual_real_bringup.launch.py \
     left_arm_ip:=192.168.1.18 right_arm_ip:=192.168.1.19
 # T2: 双臂 Servo + 遥操作
-ros2 launch rm_dualarm servo_real.launch.py control_mode:=dual teleop_type:=mouse
+ros2 launch rm_dualarm servo_real.launch.py control_mode:=dual teleop_type:=vr
 
 # 双臂带待机位初始化
 ros2 launch rm_dualarm dual_real_bringup.launch.py \
@@ -207,24 +198,65 @@ ros2 launch rm_dualarm dual_real_bringup.launch.py base_spacing_y:=0.90
 ros2 launch rm_dualarm servo_real.launch.py control_mode:=dual base_spacing_y:=0.90
 
 # === VR 遥操作 ===
-# T1 (宿主机): 启动 relay_receiver + broadcaster + vr_teleop
-ros2 launch rm_dualarm vr_teleop.launch.py
 # T2 (Docker aubo-ros): 启动 ROS 1 endpoint + relay_sender
-docker exec aubo-ros bash -c "source aubo_entry.sh && \
-  roslaunch ros_tcp_endpoint endpoint.launch & \
-  python3 /tmp/relay_sender.py --host <宿主机IP> --port 7654"
+cd /home/aubo_ws
+source devel/setup.bash
+roslaunch ros_tcp_endpoint endpoint.launch
 ```
 
-### 遥操作控制
+### VR遥操作控制
 
-| 操作 | 鼠标 | VR |
-|------|------|-----|
-| 激活 | 按住左键 | 三击 A |
-| 平移 Y/Z | 移动鼠标 | normal 模式手部位移 |
-| 平移 X | 滚轮 | — |
-| 旋转 | — | incremental 模式 |
-| 停止 | 松开左键 | 三击 A 取消 / 按住 RB |
-| 模式切换 | — | 按 B (normal↔incremental) |
+VR 遥操作输入来自 Quest 手柄按键 `/quest/joystick` 和手部 TF。
+
+手柄操作：
+
+| 操作 | 功能 |
+|------|------|
+| 三击 A | 激活/退出遥操作 |
+| 长按 A 3 秒（未激活时） | 回到待机位 |
+| 按住 RB | 临时阻塞 VR 目标输出 |
+| B | 开始/结束 rosbag 录制 |
+| RT | 单臂夹爪开合；双臂右夹爪 |
+| LT | 双臂左夹爪 |
+
+B 键录制的 bag 默认写到 `bags/vr_teleop_*`，topic 包括目标位姿、关节状态、Servo 输出、夹爪命令、主相机和腕部 RGB 相机。录制路径前缀可在 `config/vr_teleop_params.yaml` 的 `record_output_prefix` 修改。
+
+VR 输出到 `/target_pose` 前会先做一层轻量滤波，`pose_tracking_node` 内还会对输出 twist 再滤一次。默认参数在：
+
+```yaml
+# config/vr_teleop_params.yaml
+target_filter_enabled: true
+target_filter_alpha: 0.6
+
+# config/pose_tracking_settings.yaml
+filter_enabled: true
+filter_alpha: 0.6
+```
+
+`alpha` 越大延迟越小、滤波越弱；越小越平滑但延迟更明显。
+
+#### VR 标定
+
+建议每个操作者生成一份自己的 VR 标定文件。标定前先让机械臂到达 `config/standby_pose.yaml` 定义的待机位；操作者直立，双手自然握手柄，大臂贴近身体，小臂约 90 度抬起并保持手柄水平，然后按 `Y` 采样。
+
+```bash
+# T1: 确认 VR/TF 输入已经连通，启动标定节点
+ros2 launch rm_dualarm vr_calibration.launch.py output_file:=/tmp/vr_calibration.yaml
+
+# T2: 保持标定姿势，按 Y；默认采样 2 秒求均值
+```
+
+使用生成的标定文件启动 VR 遥操作：
+
+```bash
+ros2 launch rm_dualarm servo_sim.launch.py control_mode:=dual teleop_type:=vr \
+  vr_calibration_file:=/tmp/vr_calibration.yaml
+
+ros2 launch rm_dualarm servo_real.launch.py control_mode:=dual teleop_type:=vr \
+  vr_calibration_file:=/tmp/vr_calibration.yaml
+```
+
+需要调手感时，优先改生成文件中的 `left/right.position_scale` 和 `left/right.rotation_scale`。如果方向相反，再检查对应轴的正负号。
 
 ### 配置参数
 
