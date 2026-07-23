@@ -19,7 +19,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 def generate_launch_description():
     pkg_share = get_package_share_directory("rm_dualarm")
     default_params = os.path.join(
-        pkg_share, "config", "camera_marker_calibration.yaml")
+        pkg_share, "config", "camera_params.yaml")
     default_reference = os.path.join(
         pkg_share, "config", "camera_marker_reference.yaml")
 
