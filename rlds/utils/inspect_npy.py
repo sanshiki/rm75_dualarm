@@ -7,10 +7,38 @@ inspect_npy.py - 快速查看包含 dict 的 .npy 数据集
 import argparse
 import numpy as np
 import random
-import matplotlib.pyplot as plt
 import os
+import importlib
+import sys
 
-from numpy_pickle_compat import install_numpy_core_aliases
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
+os.environ.setdefault("XDG_CACHE_HOME", "/tmp")
+
+import matplotlib.pyplot as plt
+
+
+def install_numpy_core_aliases():
+    """Allow numpy 2.x object arrays to be unpickled with numpy 1.x."""
+    try:
+        numpy_core = importlib.import_module("numpy.core")
+    except ImportError:
+        return
+
+    sys.modules.setdefault("numpy._core", numpy_core)
+    for name in (
+        "multiarray",
+        "numeric",
+        "fromnumeric",
+        "_multiarray_umath",
+        "umath",
+        "_internal",
+    ):
+        try:
+            module = importlib.import_module(f"numpy.core.{name}")
+        except ImportError:
+            continue
+        sys.modules.setdefault(f"numpy._core.{name}", module)
+
 
 install_numpy_core_aliases()
 
@@ -77,21 +105,23 @@ def plot_trajectory(values, title, ylabel, save_prefix=None, extra_avg=False):
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     if save_prefix:
         plt.savefig(f"{save_prefix}_{ylabel}.png")
-    plt.show()
+        plt.close(fig)
+    else:
+        plt.show()
 
 
 def plot_sample_trajectory(sample, plot_action=True, plot_logprobs=True, save_prefix=None):
     if plot_action and 'action' in sample:
-        print("�� Plotting action trajectory for sample...")
+        print("Plotting action trajectory for sample...")
         plot_trajectory(sample['action'], "Action vs Timestep", "action", save_prefix)
     elif plot_action:
-        print("⚠️ No 'action' key found in sample; skipping action plot.")
+        print("No 'action' key found in sample; skipping action plot.")
 
     if plot_logprobs and 'action_logprobs' in sample:
-        print("�� Plotting action logprobs trajectory for sample...")
+        print("Plotting action logprobs trajectory for sample...")
         plot_trajectory(sample['action_logprobs'], "Action LogProbs vs Timestep", "action_logprobs", save_prefix, extra_avg=True)
     elif plot_logprobs:
-        print("⚠️ No 'action_logprobs' key found in sample; skipping logprobs plot.")
+        print("No 'action_logprobs' key found in sample; skipping logprobs plot.")
 
 
 def extract_entire_trajectory(data, key):
@@ -126,25 +156,28 @@ def plot_entire_trajectory(data, plot_action=True, plot_logprobs=True, save_pref
     if plot_action:
         action_values = extract_entire_trajectory(data, 'action')
         if action_values is not None and action_values.size > 0:
-            print(f"�� Plotting entire action trajectory to {save_prefix}_action.png...")
+            if save_prefix:
+                print(f"Plotting entire action trajectory to {save_prefix}_action.png...")
+            else:
+                print("Plotting entire action trajectory...")
             plot_trajectory(action_values, "Entire Action Trajectory", "action", save_prefix)
         else:
-            print("⚠️ No valid 'action' values found for entire trajectory.")
+            print("No valid 'action' values found for entire trajectory.")
 
     if plot_logprobs:
         logprob_values = extract_entire_trajectory(data, 'action_logprobs')
         if logprob_values is not None and logprob_values.size > 0:
-            print("�� Plotting entire action_logprobs trajectory...")
+            print("Plotting entire action_logprobs trajectory...")
             plot_trajectory(logprob_values, "Entire Action LogProbs Trajectory", "action_logprobs", save_prefix, extra_avg=True)
         else:
-            print("⚠️ No valid 'action_logprobs' values found for entire trajectory.")
+            print("No valid 'action_logprobs' values found for entire trajectory.")
 
 
 def inspect_npy(npy_path, show_samples=3, plot_sample=None, plot_trajectory=False, plot_action=True, plot_logprobs=True, save_prefix=None):
     # 加载数据
-    print(f"�� Loading {npy_path} ...")
+    print(f"Loading {npy_path} ...")
     data = np.load(npy_path, allow_pickle=True)
-    print(f"✅ Loaded {len(data)} samples")
+    print(f"Loaded {len(data)} samples")
 
     # 打印结构信息
     print("\n=== Basic Info ===")
@@ -173,8 +206,9 @@ def inspect_npy(npy_path, show_samples=3, plot_sample=None, plot_trajectory=Fals
         indices = random.sample(range(len(data)), min(show_samples, len(data)))
         for idx in indices:
             sample = data[idx]
+            prompt = sample.get('prompt', sample.get('task_description', '<no prompt>'))
             print(f"\n--- Sample {idx} ---")
-            print("Prompt:", sample.get('prompt', '<no prompt>'))
+            print("Prompt:", prompt)
             act = np.array(sample.get('action', []))
             print("Action shape:", act.shape)
             print("Action (first few values):", act.flatten()[:10])
@@ -183,16 +217,19 @@ def inspect_npy(npy_path, show_samples=3, plot_sample=None, plot_trajectory=Fals
             if img is not None:
                 img = np.array(img)
                 plt.imshow(img)
-                plt.title(sample.get('prompt', f"sample {idx}"))
+                plt.title(prompt)
                 plt.axis('off')
-                plt.show()
+                if os.environ.get("DISPLAY"):
+                    plt.show()
+                else:
+                    plt.close()
 
     if plot_trajectory:
         print(f"\n=== Plotting entire trajectory from {npy_path} ===")
         plot_entire_trajectory(data, plot_action=plot_action, plot_logprobs=plot_logprobs, save_prefix=save_prefix)
     elif plot_sample is not None:
         if plot_sample < 0 or plot_sample >= len(data):
-            print(f"⚠️ plot_sample index {plot_sample} out of range [0, {len(data) - 1}]")
+            print(f"plot_sample index {plot_sample} out of range [0, {len(data) - 1}]")
         else:
             sample = data[plot_sample]
             print(f"\n=== Plotting sample {plot_sample} ===")

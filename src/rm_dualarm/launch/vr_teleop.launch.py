@@ -180,6 +180,20 @@ def generate_launch_description():
         "standby_pose_file",
         default_value=_launch_default(teleop_params, "standby_pose_file", ""),
     ))
+    ld.add_action(DeclareLaunchArgument(
+        "recording_active_topic",
+        default_value=_launch_default(
+            teleop_params, "recording_active_topic", "/vr_teleop/recording_active"),
+    ))
+    ld.add_action(DeclareLaunchArgument(
+        "recording_status_topic",
+        default_value=_launch_default(
+            teleop_params, "recording_status_topic", "/vr_teleop/recording_status"),
+    ))
+    ld.add_action(DeclareLaunchArgument(
+        "recording_status_period",
+        default_value=_launch_default(teleop_params, "recording_status_period", 5.0),
+    ))
     ld.add_action(DeclareLaunchArgument("use_sim_time", default_value="false"))
 
     # ================================================================
@@ -261,6 +275,9 @@ def generate_launch_description():
                 "calibration_file": LaunchConfiguration("calibration_file"),
                 "mirror_mode": LaunchConfiguration("mirror_mode"),
                 "standby_pose_file": LaunchConfiguration("standby_pose_file"),
+                "recording_active_topic": LaunchConfiguration("recording_active_topic"),
+                "recording_status_topic": LaunchConfiguration("recording_status_topic"),
+                "recording_status_period": LaunchConfiguration("recording_status_period"),
                 "use_sim_time": LaunchConfiguration("use_sim_time"),
             },
         ],

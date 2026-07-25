@@ -5,3 +5,7 @@
 	path = src/ROS-TCP-Endpoint
 	url = https://github.com/Unity-Technologies/ROS-TCP-Endpoint.git
 	branch = main-ros2
+[submodule "rlds/rlds_dataset_builder"]
+	path = rlds/rlds_dataset_builder
+	url = https://github.com/kpertsch/rlds_dataset_builder.git
+	branch = multithreaded

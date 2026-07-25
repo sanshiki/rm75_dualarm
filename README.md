@@ -285,7 +285,14 @@ orientation_tracking_mode: full_quat # full_quat | yaw_only
 ros2 launch rm_dualarm record_dual_teleop.launch.py output:=bags/dual_test_001
 ```
 
-离线生成频率统计和轨迹图：
+离线生成频率统计和轨迹图。单臂 bag 使用：
+
+```bash
+ros2 run rm_dualarm analyze_single_teleop_bag.py bags/single_test_001 \
+  --output analysis/single_test_001
+```
+
+双臂 bag 使用：
 
 ```bash
 ros2 run rm_dualarm analyze_dual_teleop_bag.py bags/dual_test_001 \
@@ -293,6 +300,39 @@ ros2 run rm_dualarm analyze_dual_teleop_bag.py bags/dual_test_001 \
 ```
 
 输出包括 `summary.md`、左右 joint_state vs trajectory command 曲线、左右 target pose 曲线。
+
+RLDS 数据转换和检查流程见 `rlds/RLDS_INSTRUCTION.md`。
+
+从 rosbag 图像估计白平衡参数：
+
+```bash
+ros2 run rm_dualarm calibrate_white_balance.py \
+  --bag bags/single_test_001 \
+  --topics /camera/image_raw /wrist_camera/color/image_raw \
+  --output src/rm_dualarm/config/white_balance.yaml \
+  --roi center:0.5:0.5:0.2:0.2
+```
+
+如果要让多相机颜色匹配到腕部相机，可用：
+
+```bash
+ros2 run rm_dualarm calibrate_white_balance.py \
+  --method camera-match \
+  --bag bags/single_test_001 \
+  --topics /camera/image_raw /wrist_camera/color/image_raw \
+  --reference-topic /wrist_camera/color/image_raw \
+  --output src/rm_dualarm/config/white_balance.yaml
+```
+
+ROS 1 Docker 侧启动 VR relay sender：
+
+```bash
+cd /home/aubo_ws
+source devel/setup.bash
+python3 /path/to/rm_ws/src/rm_dualarm/scripts/relay_sender.py \
+  --host 192.168.1.100 \
+  --port 7654
+```
 
 ### 可视化
 

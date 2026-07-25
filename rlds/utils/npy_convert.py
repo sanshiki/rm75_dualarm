@@ -414,6 +414,15 @@ def nearest(records, time_sec, max_dt=None):
     return records[idx]
 
 
+def latest_at_or_before(records, times, time_sec):
+    if not records:
+        return None
+    idx = int(np.searchsorted(times, time_sec, side="right")) - 1
+    if idx < 0:
+        return None
+    return records[idx]
+
+
 def pose_delta(current, target):
     dp = np.asarray(target["position"], dtype=np.float64) - np.asarray(current["position"], dtype=np.float64)
     current_rot = R.from_quat(current["quat"])
@@ -436,6 +445,48 @@ def sample_times(image_recs, eef_recs, target_recs, control_hz):
     return list(np.arange(start, end + 1e-9, step))
 
 
+def set_step_gripper(step, gripper_value, action_normalization):
+    gripper_value = float(gripper_value)
+    step["gripper_cmd"] = gripper_value
+    if "raw_action" in step:
+        raw_action = np.asarray(step["raw_action"], dtype=np.float32)
+        raw_action[6] = gripper_value
+        step["raw_action"] = raw_action.astype(np.float32).tolist()
+        step["action"] = normalize_action(raw_action, action_normalization).tolist()
+        return
+
+    action = np.asarray(step["action"], dtype=np.float32)
+    action[6] = gripper_value
+    step["action"] = action.astype(np.float32).tolist()
+
+
+def apply_gripper_event_overrides(episode, grippers, action_normalization, max_dt):
+    if not episode or not grippers or max_dt <= 0.0:
+        return 0
+
+    step_times = np.asarray([step["timestamp"] for step in episode], dtype=np.float64)
+    updated = 0
+    for gripper in grippers:
+        event_time = float(gripper["time"])
+        idx = int(np.searchsorted(step_times, event_time, side="left"))
+        selected = None
+
+        if idx < len(step_times) and (step_times[idx] - event_time) <= max_dt:
+            selected = idx
+        elif idx > 0 and (event_time - step_times[idx - 1]) <= max_dt:
+            selected = idx - 1
+
+        if selected is None:
+            continue
+
+        before = float(episode[selected].get("gripper_cmd", np.nan))
+        set_step_gripper(episode[selected], gripper["value"], action_normalization)
+        if not np.isfinite(before) or abs(before - float(gripper["value"])) > 1e-6:
+            updated += 1
+
+    return updated
+
+
 def make_episode(messages, resolved, args, white_balance_gains, action_normalization):
     images = image_records(
         messages.get(resolved.get("camera", ""), []),
@@ -453,6 +504,7 @@ def make_episode(messages, resolved, args, white_balance_gains, action_normaliza
     joints = joint_state_records(messages.get(resolved.get("joint_states", ""), []))
     traj_cmds = traj_cmd_records(messages.get(resolved.get("traj_cmd", ""), []))
     grippers = gripper_records(messages.get(resolved.get("gripper_cmd", ""), []))
+    gripper_times = np.asarray([item["time"] for item in grippers], dtype=np.float64)
 
     if not images:
         raise RuntimeError("missing camera images")
@@ -483,7 +535,7 @@ def make_episode(messages, resolved, args, white_balance_gains, action_normaliza
         if target is None:
             continue
 
-        gripper = nearest(grippers, time_sec)
+        gripper = latest_at_or_before(grippers, gripper_times, time_sec)
         gripper_value = float(gripper["value"]) if gripper else args.default_gripper
         raw_action = np.concatenate([pose_delta(current, target), np.array([gripper_value], dtype=np.float32)])
         action = normalize_action(raw_action, action_normalization)
@@ -516,6 +568,12 @@ def make_episode(messages, resolved, args, white_balance_gains, action_normaliza
     if not episode:
         raise RuntimeError("no synchronized timesteps produced")
 
+    gripper_event_overrides = apply_gripper_event_overrides(
+        episode,
+        grippers,
+        action_normalization,
+        args.gripper_event_max_dt,
+    )
     duration = episode[-1]["timestamp"] - episode[0]["timestamp"] if len(episode) > 1 else 0.0
     image_shape = list(episode[0]["images"].shape)
     wrist_image_shape = list(episode[0]["wrist_images"].shape) if "wrist_images" in episode[0] else None
@@ -527,6 +585,9 @@ def make_episode(messages, resolved, args, white_balance_gains, action_normaliza
         "wrist_image_shape": wrist_image_shape,
         "sync_policy": sync_policy,
         "action_source": action_source,
+        "gripper_sync_policy": "zero_order_hold_at_or_before_with_event_frame",
+        "gripper_command_count": len(grippers),
+        "gripper_event_override_count": gripper_event_overrides,
     }
 
 
@@ -664,6 +725,7 @@ def convert_bag(bag_path, out_dir, episode_id, resolved, messages, args, stats):
             "joint_states_topic": resolved.get("joint_states"),
             "gripper_cmd_topic": resolved.get("gripper_cmd"),
             "sync_policy": extra["sync_policy"],
+            "gripper_sync_policy": extra["gripper_sync_policy"],
             "control_hz": args.control_hz,
             "action_source": extra["action_source"],
             "tf_frames": {
@@ -679,6 +741,8 @@ def convert_bag(bag_path, out_dir, episode_id, resolved, messages, args, stats):
             "layout": ACTION_LAYOUT,
             "gripper_open_value": 1.0,
             "gripper_closed_value": 0.0,
+            "gripper_command_count": extra["gripper_command_count"],
+            "gripper_event_override_count": extra["gripper_event_override_count"],
             "normalization": action_normalization_metadata(args.action_normalization),
         },
         "image": {
@@ -729,7 +793,10 @@ def parse_args():
     parser.add_argument("--clip-normalized-action", action=argparse.BooleanOptionalAction, default=True,
                         help="clip normalized action to --action-normalized-range (default: true)")
     parser.add_argument("--default-gripper", type=float, default=1.0,
-                        help="gripper value when no command exists")
+                        help="gripper value before the first command exists; 0.0=closed, 1.0=open")
+    parser.add_argument("--gripper-event-max-dt", type=float, default=1.0,
+                        help="max seconds to attach each sparse gripper command to an output step; "
+                             "set 0 to disable event attachment")
     parser.add_argument("--success", action=argparse.BooleanOptionalAction, default=None,
                         help="episode success label; omitted by default")
     parser.add_argument("--score", type=float, default=None, help="episode score; omitted by default")

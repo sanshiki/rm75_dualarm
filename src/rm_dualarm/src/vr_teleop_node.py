@@ -39,7 +39,7 @@ from moveit_msgs.msg import (
 )
 from rm_ros_interfaces.msg import Gripperset
 from sensor_msgs.msg import Joy
-from std_msgs.msg import Bool, Empty, Float32
+from std_msgs.msg import Bool, Empty, Float32, String
 from tf2_ros import Buffer, TransformListener, TransformException
 
 
@@ -153,6 +153,9 @@ class VRTrackerNode(Node):
         self.declare_parameter("mirror_mode", False)
         self.declare_parameter("standby_pose_file", "")
         self.declare_parameter("record_output_prefix", "bags/vr_teleop")
+        self.declare_parameter("recording_active_topic", "/vr_teleop/recording_active")
+        self.declare_parameter("recording_status_topic", "/vr_teleop/recording_status")
+        self.declare_parameter("recording_status_period", 5.0)
         self.declare_parameter("target_filter_enabled", True)
         self.declare_parameter("target_filter_alpha", 0.6)
 
@@ -187,6 +190,10 @@ class VRTrackerNode(Node):
         self._mirror_mode = self.get_parameter("mirror_mode").value
         self._standby_pose_file = self.get_parameter("standby_pose_file").value
         self._record_output_prefix = self.get_parameter("record_output_prefix").value
+        self._recording_active_topic = self.get_parameter("recording_active_topic").value
+        self._recording_status_topic = self.get_parameter("recording_status_topic").value
+        self._recording_status_period = float(
+            self.get_parameter("recording_status_period").value)
         self._target_filter_enabled = self.get_parameter("target_filter_enabled").value
         self._target_filter_alpha = self.get_parameter("target_filter_alpha").value
         self._target_filter_alpha = max(0.0, min(1.0, self._target_filter_alpha))
@@ -214,6 +221,7 @@ class VRTrackerNode(Node):
         self._axes = []
         self._record_proc = None
         self._record_output = None
+        self._record_started_at = None
         self._record_button_armed = False
         self._target_filters = {}
         # ---- Buttons ----
@@ -254,6 +262,10 @@ class VRTrackerNode(Node):
             Gripperset, self._right_gripper_driver_topic, 1)
         self._gripper_driver_pub = self.create_publisher(
             Gripperset, self._gripper_driver_topic, 1)
+        self._recording_active_pub = self.create_publisher(
+            Bool, self._recording_active_topic, 1)
+        self._recording_status_pub = self.create_publisher(
+            String, self._recording_status_topic, 10)
         self._last_gripper_closed = None         # debounce for single mode
         self._last_left_gripper_closed = None    # debounce for dual mode
         self._last_right_gripper_closed = None
@@ -265,6 +277,13 @@ class VRTrackerNode(Node):
         # ---- Control loop timer (50 Hz) ----
         period = 1.0 / max(self._pub_rate, 1.0)
         self._ctrl_timer = self.create_timer(period, self._control_loop)
+        self._recording_status_timer = None
+        if self._recording_status_period > 0.0:
+            self._recording_status_timer = self.create_timer(
+                max(self._recording_status_period, 0.5),
+                self._recording_status_timer_cb,
+            )
+        self._publish_recording_status("recording_idle", False)
 
         self.get_logger().info(
             f"VR teleop ready | control={self._control_mode} | mode={self._mode}"
@@ -273,6 +292,7 @@ class VRTrackerNode(Node):
             f" (alpha={self._target_filter_alpha:.2f})"
             f" | triple-press A to activate, hold A 3s in IDLE for standby"
             f", B to start/stop recording, RB to block"
+            f" | recording_status={self._recording_status_topic}"
         )
 
     def _default_standby_pose_file(self):
@@ -508,9 +528,36 @@ class VRTrackerNode(Node):
         else:
             self._start_recording()
 
+    def _recording_elapsed(self):
+        if self._record_started_at is None:
+            return 0.0
+        return time.monotonic() - self._record_started_at
+
+    def _publish_recording_status(self, text, active):
+        self._recording_active_pub.publish(Bool(data=active))
+        msg = String()
+        msg.data = text
+        self._recording_status_pub.publish(msg)
+
+    def _recording_status_timer_cb(self):
+        if self._record_proc is None or self._record_proc.poll() is not None:
+            return
+        output = self._record_output or "(unknown output)"
+        elapsed = self._recording_elapsed()
+        status = f"recording_active output={output} elapsed={elapsed:.1f}s"
+        self._publish_recording_status(status, True)
+        self.get_logger().info(
+            f"ROSBAG RECORDING ACTIVE ({elapsed:.0f}s): {output}"
+        )
+
     def _start_recording(self):
         if self._record_proc is not None and self._record_proc.poll() is None:
-            self.get_logger().warn("Rosbag recording is already running")
+            output = self._record_output or "(unknown output)"
+            self.get_logger().warn(f"Rosbag recording is already running: {output}")
+            self._publish_recording_status(
+                f"recording_active output={output} elapsed={self._recording_elapsed():.1f}s",
+                True,
+            )
             return
 
         output = self._make_record_output()
@@ -529,11 +576,18 @@ class VRTrackerNode(Node):
         except OSError as exc:
             self._record_proc = None
             self._record_output = None
+            self._record_started_at = None
+            self._publish_recording_status(f"recording_error error={exc}", False)
             self.get_logger().error(f"Failed to start rosbag recording: {exc}")
             return
 
         self._record_output = output
-        self.get_logger().info(f"Rosbag recording STARTED: {output}")
+        self._record_started_at = time.monotonic()
+        self._publish_recording_status(
+            f"recording_started output={output} elapsed=0.0s",
+            True,
+        )
+        self.get_logger().warn(f"*** ROSBAG RECORDING STARTED *** {output}")
 
     def _stop_recording(self):
         if self._record_proc is None:
@@ -541,12 +595,18 @@ class VRTrackerNode(Node):
 
         proc = self._record_proc
         output = self._record_output
+        duration = self._recording_elapsed()
         if proc.poll() is not None:
             self.get_logger().warn(
                 f"Rosbag recording already stopped: {output}"
             )
             self._record_proc = None
             self._record_output = None
+            self._record_started_at = None
+            self._publish_recording_status(
+                f"recording_stopped output={output} duration={duration:.1f}s",
+                False,
+            )
             return
 
         try:
@@ -570,8 +630,15 @@ class VRTrackerNode(Node):
         finally:
             self._record_proc = None
             self._record_output = None
+            self._record_started_at = None
 
-        self.get_logger().info(f"Rosbag recording STOPPED: {output}")
+        self._publish_recording_status(
+            f"recording_stopped output={output} duration={duration:.1f}s",
+            False,
+        )
+        self.get_logger().warn(
+            f"*** ROSBAG RECORDING STOPPED *** {output} ({duration:.1f}s)"
+        )
 
     def destroy_node(self):
         self._stop_recording()

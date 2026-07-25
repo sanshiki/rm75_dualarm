@@ -52,6 +52,9 @@ vr_teleop:
     calibration_file: ""
     mirror_mode: false
     standby_pose_file: ""
-    record_output_prefix: bags/vr_teleop
+    record_output_prefix: /media/lab-421/PSSD/vr-teleop/put_the_blue_cube_into_the_blue_plate/put_the_blue_cube_into_the_blue_plate
+    recording_active_topic: /vr_teleop/recording_active
+    recording_status_topic: /vr_teleop/recording_status
+    recording_status_period: 5.0
     target_filter_enabled: true
     target_filter_alpha: 0.6
